@@ -1,16 +1,22 @@
 name: Release
 
+# Triggered whenever a version tag (e.g. v1.2.3) is pushed.
+# Produces:
+#   • A GitHub Release with auto-generated notes and self-contained binary
+#     archives for each supported platform.
+#   • A Docker image pushed to GHCR tagged with both the version and "latest".
 on:
   push:
     tags:
       - "v*.*.*"
 
 jobs:
-  release:
+  # ── Job 1: test ──────────────────────────────────────────────────────────────
+  # Run the test suite before publishing anything. Only the SQLite suite runs
+  # here for speed; MySQL and Postgres suites use Testcontainers and are covered
+  # by developer runs locally.
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +33,119 @@ jobs:
         run: dotnet build --no-restore
 
       - name: Test
-        run: dotnet test --no-build
+        run: dotnet test --no-build --filter "FullyQualifiedName!~MySql&FullyQualifiedName!~Postgres" --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: "**/test-results.trx"
+
+  # ── Job 2: release ───────────────────────────────────────────────────────────
+  # Publishes self-contained single-file binaries for every supported platform,
+  # creates a GitHub Release with those binaries as assets, then builds and
+  # pushes the Docker image to GHCR.
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to create the GitHub Release and upload release assets.
+      contents: write
+      # Required to push the Docker image to GHCR.
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - rid: linux-x64
+            archive: tar
+          - rid: linux-arm64
+            archive: tar
+          - rid: win-x64
+            archive: zip
+          - rid: osx-x64
+            archive: tar
+          - rid: osx-arm64
+            archive: tar
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      # Publish a self-contained, single-file binary for the matrix RID.
+      # PublishSingleFile bundles the runtime and all assemblies into one
+      # executable. Trimming is disabled because ASP.NET Core and EF Core rely
+      # heavily on reflection and are not trim-compatible without extra effort.
+      - name: Publish (${{ matrix.rid }})
+        run: |
+          dotnet publish src/IpamService.csproj \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishTrimmed=false \
+            -o publish/${{ matrix.rid }}
+
+      # Archive the published output. Use .zip for Windows, .tar.gz for all others.
+      - name: Archive (${{ matrix.rid }}, zip)
+        if: matrix.archive == 'zip'
+        run: |
+          cd publish/${{ matrix.rid }}
+          zip -r ../../ipam-${{ github.ref_name }}-${{ matrix.rid }}.zip .
+
+      - name: Archive (${{ matrix.rid }}, tar)
+        if: matrix.archive == 'tar'
+        run: |
+          tar -czf ipam-${{ github.ref_name }}-${{ matrix.rid }}.tar.gz \
+            -C publish/${{ matrix.rid }} .
+
+      # Upload the archive as a workflow artifact so the create-release job
+      # can download all of them in one step.
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.rid }}
+          path: ipam-${{ github.ref_name }}-${{ matrix.rid }}.*
+          if-no-files-found: error
+
+  # ── Job 3: publish-release ───────────────────────────────────────────────────
+  # Downloads all binary archives, creates the GitHub Release with them as
+  # assets, then builds and pushes the Docker image.
+  publish-release:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Collect all binary archives produced by the matrix job.
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist/
+          merge-multiple: true
+
+      # Create the GitHub Release and attach every archive as a release asset.
+      # generate_release_notes produces a changelog from commits since the last tag.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
+
+      # ── Docker ───────────────────────────────────────────────────────────────
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -39,8 +157,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build and push with layer caching via the GHA cache backend.
+      # Tagged with both the exact version and "latest" for easy pulling.
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true

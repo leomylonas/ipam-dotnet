@@ -539,17 +539,11 @@ The `.dockerignore` should exclude `bin/`, `obj/`, `*.Tests/`, `.git/`, `.github
 
 ### `release.yml` — Release & Publish
 - **Trigger:** push of tags matching `v*.*.*`
-- **Steps:**
-  1. Checkout
-  2. Setup .NET 10
-  3. `dotnet restore`
-  4. `dotnet build --no-restore`
-  5. `dotnet test --no-build`
-  6. Docker Buildx setup
-  7. Login to GHCR (`ghcr.io`) using `GITHUB_TOKEN`
-  8. Build and push Docker image tagged as:
-     - `ghcr.io/<owner>/<repo>:<git-tag>` (e.g. `v1.2.3`)
-     - `ghcr.io/<owner>/<repo>:latest`
+- **Jobs** (run in sequence — each depends on the previous):
+  1. **`test`** — restore, build, run SQLite test suite (same filter as CI)
+  2. **`release`** (matrix) — for each target platform (`linux-x64`, `linux-arm64`, `win-x64`, `osx-x64`, `osx-arm64`): `dotnet publish` with `--self-contained true -p:PublishSingleFile=true`, then archive as `.zip` (Windows) or `.tar.gz` (all others), upload archive as a workflow artifact
+  3. **`publish-release`** — download all binary artifacts, create a GitHub Release with auto-generated notes and all archives as assets; then build and push the Docker image to GHCR tagged as `<version>` and `latest`
+- Trimming (`PublishTrimmed`) is **disabled** — ASP.NET Core and EF Core use reflection and are not trim-compatible without significant extra annotation work
 
 ---
 
