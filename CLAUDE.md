@@ -29,10 +29,11 @@ A generic, multi-tenant IP Address Management (IPAM) REST API built on .NET 10 a
 | ORM | Entity Framework Core 10 |
 | Identity | ASP.NET Identity |
 | Auth | Stateless HTTP Basic Auth (no JWT, no cookies, no sessions) |
-| API Docs | OpenAPI via Scalar |
+| Logging | Serilog (async console sink, configured via `appsettings.json`) |
+| API Docs | OpenAPI via Scalar (Development only, at `/scalar`) |
 | Default DB | SQLite |
-| Alt DB | MySQL / MariaDB (Pomelo), PostgreSQL (Npgsql) |
-| Migrations | Separate migration sets per provider |
+| Alt DB | MySQL (Oracle `MySql.EntityFrameworkCore`), PostgreSQL (Npgsql) |
+| Migrations | Separate migration folders per provider, all in the main assembly |
 
 ---
 
@@ -60,6 +61,8 @@ Three roles exist in the system. A user belongs to exactly one role and exactly 
 | `GlobalAdmin` | Full access to everything. No tenancy affiliation. |
 | `TenantAdmin` | Manage users, subnets, exclusions, and view audit within their own tenancy. Can allocate/release IPs. |
 | `TenantUser` | Request and release IPs on accessible subnets. Manage own allocations and tags. |
+
+Role name strings are defined as `const string` fields on `Models.Roles` (`Roles.GlobalAdmin`, `Roles.TenantAdmin`, `Roles.TenantUser`). A composite `Roles.TenantMembers` (`"TenantAdmin,TenantUser"`) is provided for `[Authorize(Roles = ...)]` attributes. Always use these constants — never raw string literals.
 
 ---
 
@@ -163,6 +166,7 @@ All endpoints require HTTP Basic Auth except `/health`.
 |---|---|---|---|
 | `GET` | `/api/tenancies` | GlobalAdmin | List all tenancies |
 | `POST` | `/api/tenancies` | GlobalAdmin | Create a tenancy (and initial TenantAdmin user) |
+| `PUT` | `/api/tenancies/{id}` | GlobalAdmin | Update tenancy name and description |
 | `DELETE` | `/api/tenancies/{id}` | GlobalAdmin | Delete a tenancy and all associated data |
 
 When creating a tenancy, the request body must include initial TenantAdmin credentials (username + password).
@@ -182,6 +186,7 @@ When creating a tenancy, the request body must include initial TenantAdmin crede
 |---|---|---|---|
 | `GET` | `/api/subnets/shared` | All authenticated | List shared subnets accessible to caller's tenancy |
 | `POST` | `/api/subnets/shared` | GlobalAdmin | Create a shared subnet |
+| `PUT` | `/api/subnets/shared/{id}` | GlobalAdmin | Update shared subnet name and description |
 | `DELETE` | `/api/subnets/shared/{id}` | GlobalAdmin | Delete a shared subnet |
 | `POST` | `/api/subnets/shared/{id}/access` | GlobalAdmin | Restrict subnet to a specific tenancy |
 | `DELETE` | `/api/subnets/shared/{id}/access/{tenancyId}` | GlobalAdmin | Remove tenancy restriction |
@@ -269,40 +274,97 @@ Bulk allocations share a `BulkId` but are individually releasable, each with the
 - Every request (except `/health`) requires an `Authorization: Basic <base64(user:pass)>` header
 - Credentials are validated against ASP.NET Identity on every request
 - No session, no cookie, no token issuance
-- Implement as a custom `AuthenticationHandler` deriving from `AuthenticationHandler<AuthenticationSchemeOptions>`
-- Return `401` with `WWW-Authenticate: Basic` on failure
+- Implemented as a custom `AuthenticationHandler` in `Auth/BasicAuthHandler.cs`
+- Returns `401` with `WWW-Authenticate: Basic` on failure
+
+---
+
+## Error Handling
+
+All error responses follow RFC 7807 Problem Details (`application/problem+json`). There are two layers:
+
+### Typed service exceptions (`IpamControllerBase.ExecuteAsync`)
+All controllers inherit `IpamControllerBase` and wrap their action bodies in `ExecuteAsync(...)`. This catches typed service exceptions and maps them to Problem Details responses:
+
+| Exception | HTTP status | Notes |
+|---|---|---|
+| `NotFoundException` | 404 | `detail` included when exception carries a message |
+| `ForbiddenException` | 403 | No body — access denial is never explained |
+| `ConflictException` | 409 | Business-rule conflict message in `detail` |
+| `ValidationException` | 400 | Validation failure message in `detail` |
+| `IdentityOperationException` | 400 | Identity error descriptions in `errors` extension array |
+| `NoAvailableIpException` | 409 | No free IPs remain in the subnet |
+| `NoContiguousBlockException` | 409 | No run of N consecutive free IPs exists |
+
+All typed exceptions are defined in `Services/ServiceExceptions.cs`, except `NoAvailableIpException` and `NoContiguousBlockException` which live in `Services/IpAllocationService.cs`.
+
+### Global unhandled exceptions (`UseExceptionHandler`)
+`Program.cs` registers `UseExceptionHandler` as the outermost middleware. Any exception that escapes the controller pipeline (i.e. not a typed service exception) is caught and converted to a 500 Problem Details response via `IProblemDetailsService`. `AddProblemDetails()` must be called during service registration to enable this.
 
 ---
 
 ## Database Provider Selection
 
-In `Program.cs`, read `Database:Provider` from config and switch:
+Three provider-specific `AppDbContext` subclasses (`SqliteAppDbContext`, `MySqlAppDbContext`, `PostgresAppDbContext`) are defined in `Data/ProviderDbContexts.cs`. Each is a thin wrapper whose only purpose is to carry a distinct `DbContextOptions<T>` type so that EF Core's migration tooling can resolve the correct migration set.
+
+In `Program.cs`, register the correct subclass based on configuration:
 
 ```csharp
-builder.Services.AddDbContext<AppDbContext>(options =>
+switch (provider)
 {
-    var provider = config["Database:Provider"];
-    var connStr = config["Database:ConnectionString"];
-    switch (provider)
-    {
-        case "sqlite":
-            options.UseSqlite(connStr, x => x.MigrationsAssembly("IpamService.Migrations.SQLite"));
-            break;
-        case "mysql":
-            options.UseMySql(connStr, ServerVersion.AutoDetect(connStr),
-                x => x.MigrationsAssembly("IpamService.Migrations.MySql"));
-            break;
-        case "postgres":
-            options.UseNpgsql(connStr,
-                x => x.MigrationsAssembly("IpamService.Migrations.Postgres"));
-            break;
-        default:
-            throw new InvalidOperationException($"Unknown database provider: {provider}");
-    }
-});
+    case "sqlite":
+        builder.Services.AddDbContext<AppDbContext, SqliteAppDbContext>(options =>
+            options.UseSqlite(connStr, x => x.MigrationsAssembly("IpamService")));
+        break;
+    case "mysql":
+        // Oracle MySql.EntityFrameworkCore — UseMySQL (capital SQL), not Pomelo's UseMySql.
+        builder.Services.AddDbContext<AppDbContext, MySqlAppDbContext>(options =>
+            options.UseMySQL(connStr, x => x.MigrationsAssembly("IpamService")));
+        break;
+    case "postgres":
+        builder.Services.AddDbContext<AppDbContext, PostgresAppDbContext>(options =>
+            options.UseNpgsql(connStr, x => x.MigrationsAssembly("IpamService")));
+        break;
+    default:
+        throw new InvalidOperationException($"Unknown database provider: {provider}");
+}
 ```
 
-Migrations are kept in separate folders per provider to avoid conflicts.
+Migration folders live under `Data/Migrations/SQLite/`, `Data/Migrations/MySQL/`, and `Data/Migrations/Postgres/`, all compiled into the main `IpamService` assembly.
+
+---
+
+## Service Architecture
+
+Business logic is split across domain-area services, all registered as scoped. Controllers call services and never touch `AppDbContext` directly.
+
+| Service | Responsibility |
+|---|---|
+| `TenancyService` | Tenancy lifecycle (create, list, update, delete with cascade) |
+| `UserService` | User CRUD and password management |
+| `SubnetService` | Shared and private subnet CRUD, tenancy access grants |
+| `SubnetValidationService` | CIDR parsing, RFC1918 checks, overlap detection |
+| `ExclusionService` | Exclusion CRUD with subnet-access enforcement |
+| `IpAllocationService` | Single and bulk IP allocation, release, IP availability check |
+| `TagService` | Tag list, full replace, single delete |
+| `StatsService` | Subnet utilisation stats |
+| `AuditService` | Writes and queries audit log entries |
+
+`AuditService` is injected into the domain services that write audit records; controllers do not interact with it directly.
+
+### CallerContext
+`Services/CallerContext.cs` is a `record` passed from controller to service to carry the authenticated caller's identity:
+
+```csharp
+public record CallerContext(string UserId, string Role, Guid? TenancyId)
+{
+    public bool IsGlobalAdmin => Role == Roles.GlobalAdmin;
+    public bool IsTenantAdmin => Role == Roles.TenantAdmin;
+    public bool IsTenantUser  => Role == Roles.TenantUser;
+}
+```
+
+`IpamControllerBase.GetCaller()` constructs it from HTTP claims on every request.
 
 ---
 
@@ -311,85 +373,93 @@ Migrations are kept in separate folders per provider to avoid conflicts.
 ```
 IpamService/
 ├── src/
-│   └── IpamService/
-│       ├── Auth/
-│       │   └── BasicAuthHandler.cs
-│       ├── Config/
-│       │   └── IpamOptions.cs
-│       ├── Controllers/
-│       │   ├── AuthController.cs
-│       │   ├── TenanciesController.cs
-│       │   ├── UsersController.cs
-│       │   ├── SharedSubnetsController.cs
-│       │   ├── PrivateSubnetsController.cs
-│       │   ├── ExclusionsController.cs
-│       │   ├── AllocationsController.cs
-│       │   ├── TagsController.cs
-│       │   ├── StatsController.cs
-│       │   └── AuditController.cs
-│       ├── Data/
-│       │   ├── AppDbContext.cs
-│       │   └── Migrations/
-│       │       ├── SQLite/
-│       │       ├── MySql/
-│       │       └── Postgres/
-│       ├── Models/
-│       │   ├── Tenancy.cs
-│       │   ├── ApplicationUser.cs
-│       │   ├── Subnet.cs
-│       │   ├── SubnetTenancyAccess.cs
-│       │   ├── Exclusion.cs
-│       │   ├── Allocation.cs
-│       │   ├── AllocationTag.cs
-│       │   ├── AuditLog.cs
-│       │   └── DTOs/
-│       │       ├── TenancyDtos.cs
-│       │       ├── UserDtos.cs
-│       │       ├── SubnetDtos.cs
-│       │       ├── ExclusionDtos.cs
-│       │       ├── AllocationDtos.cs
-│       │       ├── TagDtos.cs
-│       │       ├── StatsDtos.cs
-│       │       └── AuditDtos.cs
-│       ├── Services/
-│       │   ├── IpAllocationService.cs
-│       │   ├── SubnetValidationService.cs
-│       │   └── AuditService.cs
-│       ├── appsettings.json
-│       ├── appsettings.Development.json
-│       └── Program.cs
+│   ├── Auth/
+│   │   └── BasicAuthHandler.cs
+│   ├── Config/
+│   │   └── IpamOptions.cs          # Seed config binding
+│   ├── Controllers/
+│   │   ├── IpamControllerBase.cs   # GetCaller() + ExecuteAsync() + exception mapping
+│   │   ├── AuthController.cs
+│   │   ├── TenanciesController.cs
+│   │   ├── UsersController.cs
+│   │   ├── SharedSubnetsController.cs
+│   │   ├── PrivateSubnetsController.cs
+│   │   ├── ExclusionsController.cs
+│   │   ├── AllocationsController.cs
+│   │   ├── TagsController.cs
+│   │   ├── StatsController.cs
+│   │   └── AuditController.cs
+│   ├── Data/
+│   │   ├── AppDbContext.cs
+│   │   ├── ProviderDbContexts.cs   # SqliteAppDbContext / MySqlAppDbContext / PostgresAppDbContext
+│   │   ├── DesignTimeDbContextFactories.cs
+│   │   └── Migrations/
+│   │       ├── SQLite/
+│   │       ├── MySQL/
+│   │       └── Postgres/
+│   ├── Models/
+│   │   ├── Roles.cs                # const string GlobalAdmin / TenantAdmin / TenantUser / TenantMembers
+│   │   ├── Tenancy.cs
+│   │   ├── ApplicationUser.cs
+│   │   ├── Subnet.cs
+│   │   ├── SubnetTenancyAccess.cs
+│   │   ├── Exclusion.cs
+│   │   ├── Allocation.cs
+│   │   ├── AllocationTag.cs
+│   │   ├── AuditLog.cs
+│   │   └── DTOs/
+│   │       ├── TenancyDtos.cs
+│   │       ├── UserDtos.cs
+│   │       ├── SubnetDtos.cs
+│   │       ├── ExclusionDtos.cs
+│   │       ├── AllocationDtos.cs
+│   │       ├── TagDtos.cs
+│   │       ├── StatsDtos.cs
+│   │       └── AuditDtos.cs
+│   ├── Services/
+│   │   ├── CallerContext.cs        # record passed from controller to service
+│   │   ├── ServiceExceptions.cs   # NotFoundException / ForbiddenException / ConflictException / ValidationException / IdentityOperationException
+│   │   ├── AuditService.cs
+│   │   ├── IpAllocationService.cs # also defines NoAvailableIpException / NoContiguousBlockException
+│   │   ├── SubnetValidationService.cs
+│   │   ├── TenancyService.cs
+│   │   ├── UserService.cs
+│   │   ├── SubnetService.cs
+│   │   ├── ExclusionService.cs
+│   │   ├── TagService.cs
+│   │   └── StatsService.cs
+│   ├── appsettings.json
+│   ├── appsettings.Development.json
+│   └── Program.cs
 ├── tests/
-│   └── IpamService.Tests/
-│       ├── Unit/
-│       │   ├── Services/
-│       │   │   ├── IpAllocationServiceTests.cs
-│       │   │   └── SubnetValidationServiceTests.cs
-│       │   └── Auth/
-│       │       └── BasicAuthHandlerTests.cs
-│       ├── Integration/
-│       │   └── Controllers/
-│       │       ├── AuthControllerTests.cs
-│       │       ├── TenanciesControllerTests.cs
-│       │       ├── UsersControllerTests.cs
-│       │       ├── SharedSubnetsControllerTests.cs
-│       │       ├── PrivateSubnetsControllerTests.cs
-│       │       ├── ExclusionsControllerTests.cs
-│       │       ├── AllocationsControllerTests.cs
-│       │       ├── TagsControllerTests.cs
-│       │       ├── StatsControllerTests.cs
-│       │       └── AuditControllerTests.cs
-│       ├── System/
-│       │   └── Scenarios/
-│       │       ├── TenancyLifecycleTests.cs
-│       │       ├── BulkAllocationTests.cs
-│       │       ├── SharedSubnetAccessTests.cs
-│       │       └── TagFilteringTests.cs
-│       ├── Helpers/
-│       │   ├── TestWebApplicationFactory.cs
-│       │   ├── DatabaseFixture.cs
-│       │   └── AuthHelper.cs
-│       ├── appsettings.Test.json
-│       └── IpamService.Tests.csproj
+│   ├── Unit/
+│   │   ├── Services/
+│   │   │   ├── IpAllocationServiceTests.cs
+│   │   │   └── SubnetValidationServiceTests.cs
+│   │   └── Auth/
+│   │       └── BasicAuthHandlerTests.cs
+│   ├── Integration/
+│   │   └── Controllers/
+│   │       ├── ErrorHandlingTests.cs                        # Problem Details + global exception handler
+│   │       ├── TenanciesControllerTests.cs
+│   │       ├── UsersControllerTests.cs
+│   │       ├── SharedSubnetsControllerTests.cs
+│   │       ├── PrivateSubnetsAndExclusionsControllerTests.cs
+│   │       └── AllocationsControllerTests.cs
+│   ├── System/
+│   │   └── Scenarios/
+│   │       ├── TenancyLifecycleTests.cs
+│   │       ├── BulkAllocationTests.cs
+│   │       ├── SharedSubnetAccessTests.cs
+│   │       └── TagFilteringTests.cs
+│   ├── Helpers/
+│   │   ├── TestWebApplicationFactory.cs
+│   │   ├── MySqlTestWebApplicationFactory.cs
+│   │   ├── PostgresTestWebApplicationFactory.cs
+│   │   ├── MySqlContainerFixture.cs
+│   │   ├── PostgresContainerFixture.cs
+│   │   └── AuthHelper.cs
+│   └── IpamService.Tests.csproj
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml
@@ -404,26 +474,21 @@ IpamService/
 
 ## Test Suite
 
-Single test project (`IpamService.Tests`) with three folder-based categories.
+Single test project (`IpamService.Tests`) with three folder-based categories. Each integration/system test class uses `IAsyncLifetime` and calls `Factory.SeedDatabaseAsync(...)` to populate its own isolated database before the tests run.
 
-### Test Configuration
+### Test Infrastructure
 
-`appsettings.Test.json` controls the provider for all tests:
+The test host is built with `TestWebApplicationFactory : WebApplicationFactory<Program>`, which:
+- Redirects the app to a per-instance SQLite file database (unique temp path per factory instance)
+- Suppresses the startup seed so the test controls all users itself
+- Exposes `SeedDatabaseAsync(Func<AppDbContext, UserManager<ApplicationUser>, Task>)` for test fixtures
+- Exposes `CreateAuthenticatedClient(username, password)` which builds a client with a pre-set `Authorization: Basic` header
 
-```json
-{
-  "TestDatabase": {
-    "Provider": "sqlite",
-    "ConnectionString": "Data Source=:memory:"
-  },
-  "Seed": {
-    "AdminUsername": "admin",
-    "AdminPassword": "Test1234!"
-  }
-}
-```
+`MySqlTestWebApplicationFactory` and `PostgresTestWebApplicationFactory` extend the base factory and redirect to Testcontainer-backed databases. `MySqlContainerFixture` and `PostgresContainerFixture` are xUnit collection fixtures that spin up a shared container for the MySQL and PostgreSQL test suites respectively.
 
-To run against MySQL or PostgreSQL locally (e.g. via a Docker service container), change `Provider` and `ConnectionString`. No code changes required.
+`AuthHelper` provides a `SetBasicAuth(username, password)` extension method on `HttpClient`.
+
+There is no `DatabaseFixture` class — isolation is achieved via unique per-instance SQLite files, not a shared fixture.
 
 ### Unit Tests
 - Pure logic, no I/O, no EF, no HTTP
@@ -432,10 +497,9 @@ To run against MySQL or PostgreSQL locally (e.g. via a Docker service container)
 - `BasicAuthHandlerTests` — Base64 decode, missing header, malformed header, wrong credentials shape
 
 ### Integration Tests
-- `WebApplicationFactory<Program>` + real SQLite database per test class
-- Each controller has its own test class
-- Tests cover: happy path, auth failures (401), permission boundary violations (403), not found (404), conflict (409)
-- Identity and EF fully wired
+- `WebApplicationFactory<Program>` + real per-instance SQLite database
+- Each test class uses the abstract base + concrete subclass pattern: the base contains all test methods, concrete subclasses (`FooTests`, `FooMySqlTests`, `FooPostgresTests`) supply the factory so the same tests run against all providers
+- `ErrorHandlingTests` — verifies every typed exception maps to the correct Problem Details status/content-type/fields, and that unhandled exceptions reach the global `UseExceptionHandler` and produce a 500 Problem Details response. Uses `ErrorHandlingTestWebApplicationFactory` which registers a test-only `ThrowingController` via `AddApplicationPart`
 
 ### System Tests
 - Full end-to-end scenario flows across multiple controllers using `WebApplicationFactory`
@@ -443,11 +507,6 @@ To run against MySQL or PostgreSQL locally (e.g. via a Docker service container)
 - `BulkAllocationTests` — successful bulk, verify BulkId grouping, individual release, failure case with no contiguous block
 - `SharedSubnetAccessTests` — create shared subnet → restrict to tenancy → verify other tenancy cannot allocate → grant access → verify can allocate
 - `TagFilteringTests` — allocate IPs → tag them → filter by tag key/value → verify correct results returned
-
-### Test Helpers
-- `TestWebApplicationFactory` — configures test provider, seeds GlobalAdmin, provides HTTP client with Basic Auth header builder
-- `DatabaseFixture` — manages per-test database creation and teardown
-- `AuthHelper` — builds `Authorization: Basic` headers for different roles
 
 ---
 
@@ -498,13 +557,13 @@ The `.dockerignore` should exclude `bin/`, `obj/`, `*.Tests/`, `.git/`, `.github
 
 - All timestamps stored and returned as UTC
 - All IDs are `Guid`
-- Return `404` when a resource is not found, `403` when access is denied to a known resource
+- Return `404` when a resource is not found, `403` when access is denied to a known resource. Both are Problem Details responses
 - Allocation and release must always write an audit record — use a transaction to ensure atomicity
 - `BulkId` on allocations is a `Guid` shared across all IPs in one bulk request; each IP is its own `Allocation` row
 - Tag keys must be unique per allocation; a `PUT` to `/tags` is a full replace (delete all + insert)
 - RFC1918 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
 - Subnet overlap detection should check new CIDR against all existing subnets in the same scope (same tenancy for private, global for shared)
 - Use `IPNetwork` / `IPAddress` from `System.Net` for all IP arithmetic — no third-party IP libraries needed
-- Register `IpAllocationService` and `SubnetValidationService` as scoped services
-- Register `AuditService` as scoped, inject into controllers that need to write audit entries
-- Scalar UI available at `/scalar` in Development environment only
+- MySQL provider is Oracle's `MySql.EntityFrameworkCore` (method: `UseMySQL` with capital SQL), not Pomelo. No `ServerVersion` is needed
+- All domain services are registered as scoped; `AuditService` is injected into domain services, not controllers
+- Scalar UI is available at `/scalar` in Development environment only

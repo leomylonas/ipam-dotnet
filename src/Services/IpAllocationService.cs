@@ -1,6 +1,7 @@
 using System.Net;
 using IpamService.Data;
 using IpamService.Models;
+using IpamService.Models.DTOs;
 using Microsoft.EntityFrameworkCore;
 
 namespace IpamService.Services;
@@ -59,6 +60,198 @@ public class IpAllocationService
 		_db = db;
 		_audit = audit;
 	}
+
+	// ── Public helpers ────────────────────────────────────────────────────────
+
+	/// <summary>
+	/// Loads a subnet by its ID from the database, throwing a
+	/// <see cref="NotFoundException"/> if it does not exist. Used by controllers
+	/// to resolve the subnet before performing access checks and allocation.
+	/// </summary>
+	/// <param name="subnetId">The ID of the subnet to load.</param>
+	/// <returns>The resolved <see cref="Subnet"/> entity.</returns>
+	/// <exception cref="NotFoundException">Thrown if no subnet with <paramref name="subnetId"/> exists.</exception>
+	public async Task<Subnet> LoadSubnetOrThrowAsync(Guid subnetId) =>
+		await _db.Subnets.FindAsync(subnetId)
+			?? throw new NotFoundException("Subnet not found");
+
+	// ── Public query and lifecycle methods ───────────────────────────────────
+
+	/// <summary>
+	/// Returns the list of allocations visible to the caller. GlobalAdmin sees all
+	/// allocations; TenantAdmin and TenantUser see only their own tenancy's allocations.
+	/// Optionally filtered by tag key and/or value.
+	/// </summary>
+	/// <param name="caller">The context of the authenticated caller.</param>
+	/// <param name="tagKey">Optional tag key to filter by; matched case-sensitively.</param>
+	/// <param name="tagValue">Optional tag value; applied in addition to <paramref name="tagKey"/> when both are provided.</param>
+	/// <returns>A list of <see cref="AllocationResponse"/> objects.</returns>
+	public async Task<List<AllocationResponse>> ListAsync(
+		CallerContext caller,
+		string? tagKey,
+		string? tagValue)
+	{
+		// Start with all allocations; non-admin callers are scoped to their tenancy.
+		IQueryable<Allocation> query = _db.Allocations;
+
+		if (!caller.IsGlobalAdmin)
+		{
+			query = query.Where(a => a.TenancyId == caller.TenancyId);
+		}
+
+		// Apply optional tag filters. Both key and value are checked together when
+		// both are provided; key-only filtering matches any value for that key.
+		if (tagKey is not null && tagValue is not null)
+		{
+			query = query.Where(a =>
+				_db.AllocationTags.Any(t =>
+					t.AllocationId == a.Id && t.Key == tagKey && t.Value == tagValue));
+		}
+		else if (tagKey is not null)
+		{
+			query = query.Where(a =>
+				_db.AllocationTags.Any(t =>
+					t.AllocationId == a.Id && t.Key == tagKey));
+		}
+
+		return await query
+			.Select(a => new AllocationResponse(a.Id, a.IpAddress, a.UserId, a.TenancyId,
+				a.SubnetId, a.Description, a.AllocatedAt, a.BulkId))
+			.ToListAsync();
+	}
+
+	/// <summary>
+	/// Releases (deletes) an existing allocation. GlobalAdmin can release any
+	/// allocation; TenantAdmin can release allocations within their tenancy;
+	/// TenantUser can only release their own allocations. The associated tags are
+	/// also deleted atomically.
+	/// </summary>
+	/// <param name="id">ID of the allocation to release.</param>
+	/// <param name="caller">The context of the authenticated caller.</param>
+	/// <exception cref="NotFoundException">Thrown if the allocation does not exist.</exception>
+	/// <exception cref="ForbiddenException">Thrown if the caller does not have permission to release this allocation.</exception>
+	public async Task ReleaseAsync(Guid id, CallerContext caller)
+	{
+		var allocation = await _db.Allocations.FindAsync(id)
+			?? throw new NotFoundException();
+
+		if (caller.IsTenantAdmin)
+		{
+			// TenantAdmin can release allocations within their own tenancy.
+			if (allocation.TenancyId != caller.TenancyId)
+			{
+				throw new ForbiddenException();
+			}
+		}
+		else if (caller.IsTenantUser)
+		{
+			// TenantUser can only release their own allocations.
+			if (allocation.UserId != caller.UserId)
+			{
+				throw new ForbiddenException();
+			}
+		}
+
+		// GlobalAdmin: no restrictions.
+
+		// Delete all tags associated with this allocation before removing the row.
+		await _db.AllocationTags.Where(t => t.AllocationId == id).ExecuteDeleteAsync();
+		_db.Allocations.Remove(allocation);
+
+		// For GlobalAdmin (no tenancy) fall back to the allocation's own tenancy ID
+		// so the audit entry is correctly scoped for tenant-level audit queries.
+		_audit.Log(caller.UserId, caller.TenancyId ?? allocation.TenancyId,
+			"Released", allocation.IpAddress, allocation.SubnetId);
+
+		await _db.SaveChangesAsync();
+	}
+
+	/// <summary>
+	/// Checks whether a specific IP address is currently available (not allocated
+	/// and not excluded) within the given subnet.
+	/// </summary>
+	/// <param name="subnetId">ID of the subnet to check within.</param>
+	/// <param name="ip">The IP address to check, in dotted-decimal format.</param>
+	/// <param name="caller">The context of the authenticated caller.</param>
+	/// <returns>A <see cref="CheckIpResponse"/> indicating availability.</returns>
+	/// <exception cref="NotFoundException">Thrown if the subnet does not exist.</exception>
+	/// <exception cref="ForbiddenException">Thrown if the caller cannot access the subnet.</exception>
+	/// <exception cref="ValidationException">Thrown if <paramref name="ip"/> is not a valid IP address.</exception>
+	public async Task<CheckIpResponse> CheckIpAsync(Guid subnetId, string ip, CallerContext caller)
+	{
+		var subnet = await _db.Subnets.FindAsync(subnetId)
+			?? throw new NotFoundException("Subnet not found");
+
+		// Enforce subnet-level access the same way allocation does.
+		if (!await CanAccessSubnetAsync(subnet, caller))
+		{
+			throw new ForbiddenException();
+		}
+
+		if (!IPAddress.TryParse(ip, out _))
+		{
+			throw new ValidationException("Invalid IP address");
+		}
+
+		// Check whether the address is currently allocated.
+		var isAllocated = await _db.Allocations
+			.AnyAsync(a => a.SubnetId == subnetId && a.IpAddress == ip);
+
+		// Check whether the address falls within any exclusion range.
+		// String comparison is sufficient for dotted-decimal within subnets where
+		// the lexicographic and numeric orderings coincide.
+		var isExcluded = await _db.Exclusions.AnyAsync(e =>
+			e.SubnetId == subnetId &&
+			string.Compare(e.Start, ip, StringComparison.Ordinal) <= 0 &&
+			string.Compare(e.End, ip, StringComparison.Ordinal) >= 0);
+
+		return new CheckIpResponse(ip, !isAllocated && !isExcluded);
+	}
+
+	/// <summary>
+	/// Determines whether the authenticated caller is permitted to allocate from
+	/// or check the specified subnet. Shared subnet access restrictions are checked
+	/// asynchronously against the database.
+	/// </summary>
+	/// <param name="subnet">The subnet entity to evaluate access for.</param>
+	/// <param name="caller">The context of the authenticated caller.</param>
+	/// <returns><c>true</c> if the caller may interact with this subnet; <c>false</c> otherwise.</returns>
+	public async Task<bool> CanAccessSubnetAsync(Subnet subnet, CallerContext caller)
+	{
+		// GlobalAdmin can access every subnet without restriction.
+		if (caller.IsGlobalAdmin)
+		{
+			return true;
+		}
+
+		// Non-admin callers must always have a tenancy affiliation.
+		if (!caller.TenancyId.HasValue)
+		{
+			return false;
+		}
+
+		if (subnet.Type == SubnetType.Private)
+		{
+			// Private subnets are only accessible to the owning tenancy.
+			return subnet.TenancyId == caller.TenancyId;
+		}
+
+		// Shared subnets: accessible when there are no access restrictions (open to all)
+		// or when the caller's tenancy has an explicit grant.
+		var hasRestrictions = await _db.SubnetTenancyAccesses
+			.AnyAsync(a => a.SubnetId == subnet.Id);
+
+		if (!hasRestrictions)
+		{
+			// No restrictions — open to everyone.
+			return true;
+		}
+
+		return await _db.SubnetTenancyAccesses
+			.AnyAsync(a => a.SubnetId == subnet.Id && a.TenancyId == caller.TenancyId);
+	}
+
+	// ── Allocation algorithm ──────────────────────────────────────────────────
 
 	/// <summary>
 	/// Finds the first available IP in the subnet, writes an <see cref="Allocation"/>

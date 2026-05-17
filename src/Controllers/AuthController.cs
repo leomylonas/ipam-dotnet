@@ -1,8 +1,7 @@
 using System.Security.Claims;
-using IpamService.Models;
 using IpamService.Models.DTOs;
+using IpamService.Services;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 
 namespace IpamService.Controllers;
@@ -12,22 +11,24 @@ namespace IpamService.Controllers;
 /// endpoint that lets any authenticated user change their own password. All
 /// other credential management (admin-driven resets) is handled in
 /// <see cref="UsersController"/>.
+///
+/// Business logic is delegated to <see cref="UserService.ChangeOwnPasswordAsync"/>.
 /// </summary>
 [ApiController]
 [Route("api/auth")]
 [Authorize]
-public class AuthController : ControllerBase
+public class AuthController : IpamControllerBase
 {
-	/// <summary>Identity service used to look up users and update passwords.</summary>
-	private readonly UserManager<ApplicationUser> _userManager;
+	/// <summary>Service that owns password management logic.</summary>
+	private readonly UserService _users;
 
 	/// <summary>
 	/// Initialises a new instance of <see cref="AuthController"/>.
 	/// </summary>
-	/// <param name="userManager">ASP.NET Identity user manager, injected by the DI container.</param>
-	public AuthController(UserManager<ApplicationUser> userManager)
+	/// <param name="users">User service, injected by the DI container.</param>
+	public AuthController(UserService users)
 	{
-		_userManager = userManager;
+		_users = users;
 	}
 
 	/// <summary>
@@ -42,34 +43,12 @@ public class AuthController : ControllerBase
 	/// <c>400 Bad Request</c> if the new password violates the configured policy.
 	/// </returns>
 	[HttpPut("password")]
-	public async Task<IActionResult> ChangeOwnPassword([FromBody] ChangePasswordRequest req)
-	{
-		// Resolve the caller's user ID from the claims set that BasicAuthHandler built.
-		var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)!;
-		var user = await _userManager.FindByIdAsync(userId);
-
-		// This should never be null for an authenticated user, but we handle it
-		// defensively to avoid a null-reference exception.
-		if (user is null)
+	public Task<IActionResult> ChangeOwnPassword([FromBody] ChangePasswordRequest req) =>
+		ExecuteAsync(async () =>
 		{
-			return NotFound();
-		}
-
-		// Remove the existing password and add the new one in one logical step.
-		// Using RemovePassword + AddPassword avoids the need to supply the old
-		// password (the Basic Auth header already served as proof of identity).
-		await _userManager.RemovePasswordAsync(user);
-		var addResult = await _userManager.AddPasswordAsync(user, req.NewPassword);
-
-		if (!addResult.Succeeded)
-		{
-			// Surface the Identity validation errors (e.g. "Passwords must have
-			// at least one uppercase") so the caller knows what to fix.
-			return BadRequest(addResult.Errors.Select(e => e.Description));
-		}
-
-		// RFC 7231: 204 is the standard success response for a mutation that
-		// produces no new resource to return.
-		return NoContent();
-	}
+			// Resolve the caller's user ID from the claims built by BasicAuthHandler.
+			var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+			await _users.ChangeOwnPasswordAsync(userId, req.NewPassword);
+			return NoContent();
+		});
 }

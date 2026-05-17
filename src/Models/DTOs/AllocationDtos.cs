@@ -27,6 +27,20 @@ public record BulkAllocateRequest(
 );
 
 /// <summary>
+/// Response shape returned by the IP availability check endpoint
+/// <c>GET /api/subnets/{subnetId}/check/{ip}</c>.
+/// </summary>
+/// <param name="Ip">The IP address that was checked, in dotted-decimal format.</param>
+/// <param name="Available">
+/// <c>true</c> if the address is neither allocated nor within any exclusion range;
+/// <c>false</c> otherwise.
+/// </param>
+public record CheckIpResponse(
+	string Ip,
+	bool Available
+);
+
+/// <summary>
 /// Response shape returned when listing or creating allocations.
 /// </summary>
 /// <param name="Id">The allocation's unique identifier.</param>

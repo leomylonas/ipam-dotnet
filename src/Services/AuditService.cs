@@ -1,5 +1,7 @@
 using IpamService.Data;
 using IpamService.Models;
+using IpamService.Models.DTOs;
+using Microsoft.EntityFrameworkCore;
 
 namespace IpamService.Services;
 
@@ -23,6 +25,39 @@ public class AuditService
 	public AuditService(AppDbContext db)
 	{
 		_db = db;
+	}
+
+	/// <summary>
+	/// Returns audit log entries ordered newest-first. GlobalAdmin sees all entries;
+	/// TenantAdmin sees only entries for their own tenancy; TenantUser is forbidden.
+	/// </summary>
+	/// <param name="caller">The context of the authenticated caller.</param>
+	/// <returns>A list of <see cref="AuditLogResponse"/> objects, newest first.</returns>
+	/// <exception cref="ForbiddenException">Thrown when the caller is a TenantUser.</exception>
+	public async Task<List<AuditLogResponse>> ListAsync(CallerContext caller)
+	{
+		// Reject TenantUser callers up front — they have no audit log visibility.
+		if (!caller.IsGlobalAdmin && !caller.IsTenantAdmin)
+		{
+			throw new ForbiddenException();
+		}
+
+		var query = _db.AuditLogs.AsQueryable();
+
+		if (caller.IsTenantAdmin)
+		{
+			// Scope to the caller's tenancy; GlobalAdmin audit entries (TenancyId = null)
+			// are excluded from tenant-level views.
+			query = query.Where(a => a.TenancyId == caller.TenancyId);
+		}
+
+		// Return entries in reverse-chronological order so the most recent events
+		// appear first, which is the natural order for an audit trail UI.
+		return await query
+			.OrderByDescending(a => a.Timestamp)
+			.Select(a => new AuditLogResponse(a.Id, a.UserId, a.TenancyId, a.Action,
+				a.IpAddress, a.SubnetId, a.Timestamp, a.Notes))
+			.ToListAsync();
 	}
 
 	/// <summary>

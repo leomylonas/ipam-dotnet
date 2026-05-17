@@ -106,12 +106,24 @@ builder.Services.AddAuthorization();
 // ── Domain services ───────────────────────────────────────────────────────────
 // Scoped lifetime: one instance per HTTP request, shared between all services
 // and controllers within that request so they operate on the same EF context.
+// Core algorithmic services (pre-existing):
 builder.Services.AddScoped<IpAllocationService>();
 builder.Services.AddScoped<SubnetValidationService>();
 builder.Services.AddScoped<AuditService>();
+// Domain-area services — each owns the business logic and DB access for its area:
+builder.Services.AddScoped<TenancyService>();
+builder.Services.AddScoped<UserService>();
+builder.Services.AddScoped<SubnetService>();
+builder.Services.AddScoped<ExclusionService>();
+builder.Services.AddScoped<TagService>();
+builder.Services.AddScoped<StatsService>();
 
 // ── Web API infrastructure ────────────────────────────────────────────────────
 builder.Services.AddControllers();
+
+// AddProblemDetails registers the RFC 7807 / RFC 9457 problem-details factory
+// used by the global exception handler below and by ControllerBase.Problem().
+builder.Services.AddProblemDetails();
 
 // OpenAPI document generation — used by Scalar in Development only.
 builder.Services.AddOpenApi();
@@ -132,6 +144,45 @@ if (app.Environment.IsDevelopment())
 	app.MapOpenApi();
 	app.MapScalarApiReference();
 }
+
+// ── Global exception handler ──────────────────────────────────────────────────
+// Catches any exception that escapes the controller pipeline (i.e. is not
+// handled by IpamControllerBase.ExecuteAsync) and converts it into a Problem
+// Details response (RFC 7807 / RFC 9457) so clients always receive structured
+// JSON rather than an unformatted 500 HTML page.
+//
+// UseExceptionHandler with a delegate is the preferred approach on .NET 8+:
+// the delegate receives an IExceptionHandlerFeature that exposes the raw
+// exception, and we write a Problem response using IProblemDetailsService
+// which is registered above via AddProblemDetails().
+app.UseExceptionHandler(errApp => errApp.Run(async ctx =>
+{
+	// Retrieve the exception that triggered this handler.
+	var exceptionFeature = ctx.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+	var ex = exceptionFeature?.Error;
+
+	// Default to 500; the status has already been set to 500 by the middleware.
+	ctx.Response.StatusCode = StatusCodes.Status500InternalServerError;
+
+	// IProblemDetailsService writes the structured application/problem+json body.
+	// We pass the exception so that the factory can include it when
+	// configured to do so (e.g. in Development via exception-detail middleware).
+	var problemDetailsService = ctx.RequestServices.GetRequiredService<IProblemDetailsService>();
+	await problemDetailsService.WriteAsync(new ProblemDetailsContext
+	{
+		HttpContext = ctx,
+		// Populate the detail field with the exception message so that
+		// server-side errors surface a brief human-readable description.
+		// In production, consider clearing this to avoid leaking internals.
+		ProblemDetails =
+		{
+			Status = StatusCodes.Status500InternalServerError,
+			Title = "An unexpected error occurred.",
+			Detail = ex?.Message,
+		},
+		Exception = ex,
+	});
+}));
 
 // Authentication must run before authorization so that HttpContext.User is
 // populated before [Authorize] attributes are evaluated.
@@ -189,7 +240,7 @@ using (var scope = app.Services.CreateScope())
 		{
 			UserName = adminUsername,
 			Email = adminUsername,
-			Role = "GlobalAdmin",
+			Role = Roles.GlobalAdmin,
 			TenancyId = null
 		};
 		await userManager.CreateAsync(admin, adminPassword);
