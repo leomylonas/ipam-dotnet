@@ -10,7 +10,7 @@ namespace IpamService.Controllers;
 /// <list type="bullet">
 ///   <item><term>GlobalAdmin</term><description>Can list and manage users across all tenancies and assign any role.</description></item>
 ///   <item><term>TenantAdmin</term><description>Can list and manage users within their own tenancy; can only create <c>TenantUser</c> accounts.</description></item>
-///   <item><term>TenantUser</term><description>Cannot list or create users; can only change their own password via <see cref="AuthController"/>.</description></item>
+///   <item><term>TenantUser</term><description>Cannot list or create users; can only change their own password via <c>PUT /api/users/{id}/password</c>.</description></item>
 /// </list>
 ///
 /// All business logic and role-based permission checks are delegated to
@@ -102,7 +102,7 @@ public class UsersController : IpamControllerBase
 	/// <summary>
 	/// Changes the password of any user. GlobalAdmin can target any user;
 	/// TenantAdmin can target users within their tenancy; TenantUser can only
-	/// change their own password (use <c>PUT /api/auth/password</c> for convenience).
+	/// change their own password by passing their own ID.
 	/// </summary>
 	/// <param name="id">The Identity user ID of the target user.</param>
 	/// <param name="req">Request body containing the new password.</param>

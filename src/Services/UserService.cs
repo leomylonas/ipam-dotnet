@@ -16,7 +16,7 @@ namespace IpamService.Services;
 /// <list type="bullet">
 ///   <item><term>GlobalAdmin</term><description>Unrestricted access to all user operations across all tenancies.</description></item>
 ///   <item><term>TenantAdmin</term><description>Can only list and manage <c>TenantUser</c> accounts within their own tenancy.</description></item>
-///   <item><term>TenantUser</term><description>No user management rights; can only change their own password via <see cref="ChangeOwnPasswordAsync"/>.</description></item>
+///   <item><term>TenantUser</term><description>No user management rights; can only change their own password via <c>PUT /api/users/{id}/password</c>.</description></item>
 /// </list>
 ///
 /// Registered as a scoped service.
@@ -257,25 +257,4 @@ public class UserService
 		}
 	}
 
-	/// <summary>
-	/// Changes the password of the caller's own account. Used by the self-service
-	/// <c>PUT /api/auth/password</c> endpoint where no cross-user access check
-	/// is needed — the caller can only ever target themselves.
-	/// </summary>
-	/// <param name="userId">Identity ID of the authenticated user changing their own password.</param>
-	/// <param name="newPassword">The new password to set.</param>
-	/// <exception cref="NotFoundException">Thrown if the user record cannot be found (should not happen for an authenticated user).</exception>
-	/// <exception cref="IdentityOperationException">Thrown if the new password violates the configured policy.</exception>
-	public async Task ChangeOwnPasswordAsync(string userId, string newPassword)
-	{
-		var user = await _userManager.FindByIdAsync(userId)
-			?? throw new NotFoundException();
-
-		await _userManager.RemovePasswordAsync(user);
-		var result = await _userManager.AddPasswordAsync(user, newPassword);
-		if (!result.Succeeded)
-		{
-			throw new IdentityOperationException(result.Errors.Select(e => e.Description));
-		}
-	}
 }

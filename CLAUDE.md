@@ -154,12 +154,6 @@ Notes         string?
 
 All endpoints require HTTP Basic Auth except `/health`.
 
-### Auth
-
-| Method | Route | Access | Description |
-|---|---|---|---|
-| `PUT` | `/api/auth/password` | Own user | Change own password |
-
 ### Tenancies
 
 | Method | Route | Access | Description |
@@ -178,7 +172,7 @@ When creating a tenancy, the request body must include initial TenantAdmin crede
 | `GET` | `/api/users` | GlobalAdmin: all users; TenantAdmin: own tenancy only | List users |
 | `POST` | `/api/users` | GlobalAdmin: any tenancy + any role; TenantAdmin: TenantUser only in own tenancy | Create user |
 | `DELETE` | `/api/users/{id}` | GlobalAdmin: any; TenantAdmin: own tenancy only | Delete user |
-| `PUT` | `/api/users/{id}/password` | GlobalAdmin: any; TenantAdmin: own tenancy; User: own only | Change password |
+| `PUT` | `/api/users/{id}/password` | GlobalAdmin: any; TenantAdmin: own tenancy; TenantUser: own ID only | Change password |
 
 ### Shared Subnets
 
@@ -379,7 +373,6 @@ IpamService/
 │   │   └── IpamOptions.cs          # Seed config binding
 │   ├── Controllers/
 │   │   ├── IpamControllerBase.cs   # GetCaller() + ExecuteAsync() + exception mapping
-│   │   ├── AuthController.cs
 │   │   ├── TenanciesController.cs
 │   │   ├── UsersController.cs
 │   │   ├── SharedSubnetsController.cs
