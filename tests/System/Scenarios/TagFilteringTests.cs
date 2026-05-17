@@ -7,14 +7,17 @@ using IpamService.Tests.Helpers;
 namespace IpamService.Tests.System.Scenarios;
 
 /// <summary>
-/// End-to-end system tests for the allocation tag system. Tests verify that tags
-/// can be set and filtered correctly, that a PUT replaces all existing tags (full
-/// replace semantics), and that individual tags can be deleted by key.
+/// Abstract base class for end-to-end allocation tag system scenario tests. Concrete
+/// subclasses supply the factory so the same scenarios run against SQLite, MySQL, and
+/// PostgreSQL without duplicating test logic.
+///
+/// Tests verify that tags can be set and filtered correctly, that a PUT replaces all
+/// existing tags (full replace semantics), and that individual tags can be deleted by key.
 /// </summary>
-public class TagFilteringTests : IAsyncLifetime
+public abstract class TagFilteringTestsBase : IAsyncLifetime
 {
 	/// <summary>Shared factory that owns the test web server and database.</summary>
-	private readonly TestWebApplicationFactory _factory;
+	protected readonly TestWebApplicationFactory Factory;
 
 	/// <summary>HTTP client pre-authenticated as a TenantUser.</summary>
 	private HttpClient _tenantUserClient = null!;
@@ -23,11 +26,13 @@ public class TagFilteringTests : IAsyncLifetime
 	private Guid _subnetId;
 
 	/// <summary>
-	/// Initialises a new instance of <see cref="TagFilteringTests"/>.
+	/// Initialises a new instance of <see cref="TagFilteringTestsBase"/> using the
+	/// supplied provider-specific factory.
 	/// </summary>
-	public TagFilteringTests()
+	/// <param name="factory">Factory that controls which database engine is used.</param>
+	protected TagFilteringTestsBase(TestWebApplicationFactory factory)
 	{
-		_factory = new TestWebApplicationFactory();
+		Factory = factory;
 	}
 
 	/// <summary>
@@ -36,7 +41,7 @@ public class TagFilteringTests : IAsyncLifetime
 	/// </summary>
 	public async Task InitializeAsync()
 	{
-		await _factory.SeedDatabaseAsync(async (db, um) =>
+		await Factory.SeedDatabaseAsync(async (db, um) =>
 		{
 			var tenancy = new Tenancy
 			{
@@ -72,13 +77,13 @@ public class TagFilteringTests : IAsyncLifetime
 			await db.SaveChangesAsync();
 		});
 
-		_tenantUserClient = _factory.CreateAuthenticatedClient("taguser", "Test1234!");
+		_tenantUserClient = Factory.CreateAuthenticatedClient("taguser", "Test1234!");
 	}
 
 	/// <summary>Disposes the factory after all tests in the class have run.</summary>
 	public Task DisposeAsync()
 	{
-		_factory.Dispose();
+		Factory.Dispose();
 		return Task.CompletedTask;
 	}
 
@@ -170,4 +175,41 @@ public class TagFilteringTests : IAsyncLifetime
 		Assert.Single(tags!);
 		Assert.Equal("y", tags![0].Key);
 	}
+}
+
+/// <summary>
+/// Runs <see cref="TagFilteringTestsBase"/> against an isolated SQLite file database.
+/// </summary>
+public class TagFilteringTests : TagFilteringTestsBase
+{
+	/// <summary>Initialises the tests with a per-instance SQLite file database.</summary>
+	public TagFilteringTests() : base(new TestWebApplicationFactory()) { }
+}
+
+/// <summary>
+/// Runs <see cref="TagFilteringTestsBase"/> against a MySQL Testcontainer database.
+/// </summary>
+[Collection("mysql")]
+public class TagFilteringMySqlTests : TagFilteringTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a MySQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>mysql</c> collection.</param>
+	public TagFilteringMySqlTests(MySqlContainerFixture fixture)
+		: base(new MySqlTestWebApplicationFactory(fixture)) { }
+}
+
+/// <summary>
+/// Runs <see cref="TagFilteringTestsBase"/> against a PostgreSQL Testcontainer database.
+/// </summary>
+[Collection("postgres")]
+public class TagFilteringPostgresTests : TagFilteringTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a PostgreSQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>postgres</c> collection.</param>
+	public TagFilteringPostgresTests(PostgresContainerFixture fixture)
+		: base(new PostgresTestWebApplicationFactory(fixture)) { }
 }

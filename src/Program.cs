@@ -32,10 +32,10 @@ switch (provider)
 		break;
 
 	case "mysql":
-		// Pomelo provider; ServerVersion.AutoDetect queries the server
-		// on startup to pick the right SQL dialect.
+		// Oracle MySQL provider — UseMySQL (capital SQL) is the Oracle API,
+		// distinct from Pomelo's UseMySql. No ServerVersion needed.
 		builder.Services.AddDbContext<AppDbContext, MySqlAppDbContext>(options =>
-			options.UseMySql(connStr, ServerVersion.AutoDetect(connStr),
+			options.UseMySQL(connStr,
 				x => x.MigrationsAssembly("IpamService")));
 		break;
 

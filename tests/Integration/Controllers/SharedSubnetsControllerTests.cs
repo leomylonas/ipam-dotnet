@@ -7,14 +7,17 @@ using IpamService.Tests.Helpers;
 namespace IpamService.Tests.Integration.Controllers;
 
 /// <summary>
-/// Integration tests for <c>SharedSubnetsController</c>. Verifies that shared
-/// subnets can be created and listed by GlobalAdmin, that TenantUser cannot create
-/// shared subnets (403), and that the access grant/revoke round-trip works.
+/// Abstract base class containing all integration tests for <c>SharedSubnetsController</c>.
+/// Concrete subclasses supply the factory so the same test logic runs against SQLite,
+/// MySQL, and PostgreSQL without duplication.
+///
+/// Tests cover: GlobalAdmin can create/list shared subnets, TenantUser is forbidden
+/// from creating them, and the access grant/revoke lifecycle works correctly.
 /// </summary>
-public class SharedSubnetsControllerTests : IAsyncLifetime
+public abstract class SharedSubnetsControllerTestsBase : IAsyncLifetime
 {
 	/// <summary>Shared factory that owns the test web server and database.</summary>
-	private readonly TestWebApplicationFactory _factory;
+	protected readonly TestWebApplicationFactory Factory;
 
 	/// <summary>HTTP client pre-authenticated as GlobalAdmin.</summary>
 	private HttpClient _adminClient = null!;
@@ -26,11 +29,13 @@ public class SharedSubnetsControllerTests : IAsyncLifetime
 	private Guid _tenancyId;
 
 	/// <summary>
-	/// Initialises a new instance of <see cref="SharedSubnetsControllerTests"/>.
+	/// Initialises a new instance of <see cref="SharedSubnetsControllerTestsBase"/>
+	/// using the supplied provider-specific factory.
 	/// </summary>
-	public SharedSubnetsControllerTests()
+	/// <param name="factory">Factory that controls which database engine is used.</param>
+	protected SharedSubnetsControllerTestsBase(TestWebApplicationFactory factory)
 	{
-		_factory = new TestWebApplicationFactory();
+		Factory = factory;
 	}
 
 	/// <summary>
@@ -38,7 +43,7 @@ public class SharedSubnetsControllerTests : IAsyncLifetime
 	/// </summary>
 	public async Task InitializeAsync()
 	{
-		await _factory.SeedDatabaseAsync(async (db, um) =>
+		await Factory.SeedDatabaseAsync(async (db, um) =>
 		{
 			var admin = new ApplicationUser
 			{
@@ -70,14 +75,14 @@ public class SharedSubnetsControllerTests : IAsyncLifetime
 			await db.SaveChangesAsync();
 		});
 
-		_adminClient = _factory.CreateAuthenticatedClient("admin", "Test1234!");
-		_tenantUserClient = _factory.CreateAuthenticatedClient("tuser", "Test1234!");
+		_adminClient = Factory.CreateAuthenticatedClient("admin", "Test1234!");
+		_tenantUserClient = Factory.CreateAuthenticatedClient("tuser", "Test1234!");
 	}
 
 	/// <summary>Disposes the factory after all tests in the class have run.</summary>
 	public Task DisposeAsync()
 	{
-		_factory.Dispose();
+		Factory.Dispose();
 		return Task.CompletedTask;
 	}
 
@@ -138,4 +143,41 @@ public class SharedSubnetsControllerTests : IAsyncLifetime
 			$"/api/subnets/shared/{subnet.Id}/access/{_tenancyId}");
 		Assert.Equal(HttpStatusCode.NoContent, revokeResp.StatusCode);
 	}
+}
+
+/// <summary>
+/// Runs <see cref="SharedSubnetsControllerTestsBase"/> against an isolated SQLite file database.
+/// </summary>
+public class SharedSubnetsControllerTests : SharedSubnetsControllerTestsBase
+{
+	/// <summary>Initialises the tests with a per-instance SQLite file database.</summary>
+	public SharedSubnetsControllerTests() : base(new TestWebApplicationFactory()) { }
+}
+
+/// <summary>
+/// Runs <see cref="SharedSubnetsControllerTestsBase"/> against a MySQL Testcontainer database.
+/// </summary>
+[Collection("mysql")]
+public class SharedSubnetsControllerMySqlTests : SharedSubnetsControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a MySQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>mysql</c> collection.</param>
+	public SharedSubnetsControllerMySqlTests(MySqlContainerFixture fixture)
+		: base(new MySqlTestWebApplicationFactory(fixture)) { }
+}
+
+/// <summary>
+/// Runs <see cref="SharedSubnetsControllerTestsBase"/> against a PostgreSQL Testcontainer database.
+/// </summary>
+[Collection("postgres")]
+public class SharedSubnetsControllerPostgresTests : SharedSubnetsControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a PostgreSQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>postgres</c> collection.</param>
+	public SharedSubnetsControllerPostgresTests(PostgresContainerFixture fixture)
+		: base(new PostgresTestWebApplicationFactory(fixture)) { }
 }

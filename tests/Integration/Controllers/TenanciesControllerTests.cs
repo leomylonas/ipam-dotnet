@@ -6,28 +6,32 @@ using IpamService.Tests.Helpers;
 namespace IpamService.Tests.Integration.Controllers;
 
 /// <summary>
-/// Integration tests for <c>TenanciesController</c>. Each test class instance
-/// creates its own isolated SQLite database via <see cref="TestWebApplicationFactory"/>
-/// and seeds a GlobalAdmin user before any HTTP requests are made.
+/// Abstract base class containing all integration tests for <c>TenanciesController</c>.
+/// Concrete subclasses supply the factory so the same test logic runs against SQLite,
+/// MySQL, and PostgreSQL without duplication.
 ///
 /// Tests cover: happy paths, duplicate-name conflict, authentication requirement,
 /// and delete (both success and not-found).
 /// </summary>
-public class TenanciesControllerTests : IAsyncLifetime
+public abstract class TenanciesControllerTestsBase : IAsyncLifetime
 {
 	/// <summary>Shared factory that owns the test web server and database.</summary>
-	private readonly TestWebApplicationFactory _factory;
+	protected readonly TestWebApplicationFactory Factory;
 
 	/// <summary>HTTP client pre-authenticated as GlobalAdmin.</summary>
 	private HttpClient _adminClient = null!;
 
 	/// <summary>
-	/// Initialises a new instance of <see cref="TenanciesControllerTests"/> and
-	/// creates the test web application factory.
+	/// Initialises a new instance of <see cref="TenanciesControllerTestsBase"/>
+	/// using the supplied provider-specific factory.
 	/// </summary>
-	public TenanciesControllerTests()
+	/// <param name="factory">
+	/// The <see cref="TestWebApplicationFactory"/> (or subclass) that controls which
+	/// database engine is used for this test run.
+	/// </param>
+	protected TenanciesControllerTestsBase(TestWebApplicationFactory factory)
 	{
-		_factory = new TestWebApplicationFactory();
+		Factory = factory;
 	}
 
 	/// <summary>
@@ -36,7 +40,7 @@ public class TenanciesControllerTests : IAsyncLifetime
 	/// </summary>
 	public async Task InitializeAsync()
 	{
-		await _factory.SeedDatabaseAsync(async (db, um) =>
+		await Factory.SeedDatabaseAsync(async (db, um) =>
 		{
 			// Create the GlobalAdmin user that the authenticated client will use.
 			var admin = new IpamService.Models.ApplicationUser
@@ -49,16 +53,15 @@ public class TenanciesControllerTests : IAsyncLifetime
 		});
 
 		// Build an HTTP client that sends Basic auth on every request.
-		_adminClient = _factory.CreateAuthenticatedClient("admin", "Test1234!");
+		_adminClient = Factory.CreateAuthenticatedClient("admin", "Test1234!");
 	}
 
 	/// <summary>
-	/// Disposes the factory (and its database file) after all tests in the class
-	/// have run. Called by xUnit after each test method.
+	/// Disposes the factory (and its database) after all tests in the class have run.
 	/// </summary>
 	public Task DisposeAsync()
 	{
-		_factory.Dispose();
+		Factory.Dispose();
 		return Task.CompletedTask;
 	}
 
@@ -108,7 +111,7 @@ public class TenanciesControllerTests : IAsyncLifetime
 	public async Task GetTenancies_Unauthenticated_Returns401()
 	{
 		// Use a raw (unauthenticated) client — no auth header set.
-		var client = _factory.CreateClient();
+		var client = Factory.CreateClient();
 		var response = await client.GetAsync("/api/tenancies");
 		Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
 	}
@@ -140,4 +143,50 @@ public class TenanciesControllerTests : IAsyncLifetime
 		var response = await _adminClient.DeleteAsync($"/api/tenancies/{Guid.NewGuid()}");
 		Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 	}
+}
+
+/// <summary>
+/// Runs <see cref="TenanciesControllerTestsBase"/> against an isolated SQLite
+/// file database — the default for local development and CI.
+/// </summary>
+public class TenanciesControllerTests : TenanciesControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a fresh per-instance SQLite file database.
+	/// </summary>
+	public TenanciesControllerTests() : base(new TestWebApplicationFactory()) { }
+}
+
+/// <summary>
+/// Runs <see cref="TenanciesControllerTestsBase"/> against a MySQL database
+/// provisioned by a shared Testcontainer. Each instance gets its own isolated
+/// database within the container.
+/// </summary>
+[Collection("mysql")]
+public class TenanciesControllerMySqlTests : TenanciesControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a MySQL-backed factory connected to the shared
+	/// Testcontainer server.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>mysql</c> collection.</param>
+	public TenanciesControllerMySqlTests(MySqlContainerFixture fixture)
+		: base(new MySqlTestWebApplicationFactory(fixture)) { }
+}
+
+/// <summary>
+/// Runs <see cref="TenanciesControllerTestsBase"/> against a PostgreSQL database
+/// provisioned by a shared Testcontainer. Each instance gets its own isolated
+/// database within the container.
+/// </summary>
+[Collection("postgres")]
+public class TenanciesControllerPostgresTests : TenanciesControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a PostgreSQL-backed factory connected to the shared
+	/// Testcontainer server.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>postgres</c> collection.</param>
+	public TenanciesControllerPostgresTests(PostgresContainerFixture fixture)
+		: base(new PostgresTestWebApplicationFactory(fixture)) { }
 }

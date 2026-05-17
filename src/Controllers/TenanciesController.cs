@@ -155,10 +155,27 @@ public class TenanciesController : ControllerBase
 			.ToListAsync();
 
 		// Bulk-delete dependent data before removing the tenancy itself.
-		// ExecuteDeleteAsync generates a single DELETE statement per call,
-		// which is more efficient than loading entities into memory.
+		// ExecuteDeleteAsync generates a single DELETE statement per call.
+		// Deletion order matters: child rows must be removed before their parents
+		// so that FK constraints are satisfied on engines that enforce them (MySQL).
+
+		// AllocationTags reference Allocations, so they must go first.
+		await _db.AllocationTags
+			.Where(t => _db.Allocations
+				.Where(a => a.TenancyId == id)
+				.Select(a => a.Id)
+				.Contains(t.AllocationId))
+			.ExecuteDeleteAsync();
+
 		await _db.Allocations.Where(a => a.TenancyId == id).ExecuteDeleteAsync();
-		await _db.Exclusions.Where(e => subnets.Contains(e.SubnetId)).ExecuteDeleteAsync();
+
+		// Guard against empty subnets list: some providers generate invalid SQL
+		// for an IN clause with zero elements.
+		if (subnets.Count > 0)
+		{
+			await _db.Exclusions.Where(e => subnets.Contains(e.SubnetId)).ExecuteDeleteAsync();
+		}
+
 		await _db.SubnetTenancyAccesses.Where(a => a.TenancyId == id).ExecuteDeleteAsync();
 		await _db.Subnets.Where(s => s.TenancyId == id).ExecuteDeleteAsync();
 		await _db.AuditLogs.Where(a => a.TenancyId == id).ExecuteDeleteAsync();

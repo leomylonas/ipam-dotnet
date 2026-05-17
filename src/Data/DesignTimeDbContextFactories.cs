@@ -23,9 +23,8 @@ public sealed class MySqlDesignTimeDbContextFactory : IDesignTimeDbContextFactor
 		const string connStr = "Server=localhost;Port=3306;Database=ipam_design;User=root;Password=pass;";
 
 		var optionsBuilder = new DbContextOptionsBuilder<MySqlAppDbContext>();
-		optionsBuilder.UseMySql(
+		optionsBuilder.UseMySQL(
 			connStr,
-			ServerVersion.Parse("8.0.36-mysql"),
 			x => x.MigrationsAssembly("IpamService"));
 
 		return new MySqlAppDbContext(optionsBuilder.Options);

@@ -7,18 +7,21 @@ using IpamService.Tests.Helpers;
 namespace IpamService.Tests.Integration.Controllers;
 
 /// <summary>
-/// Integration tests for <c>AllocationsController</c>. Each instance gets its
-/// own isolated SQLite database seeded with a tenancy, a TenantUser, and a small
-/// private subnet (10.0.0.0/29 = 6 usable IPs) so tests can exercise the full
-/// allocation/release cycle.
+/// Abstract base class containing all integration tests for <c>AllocationsController</c>.
+/// Concrete subclasses supply the factory so the same test logic runs against SQLite,
+/// MySQL, and PostgreSQL without duplication.
+///
+/// Each instance gets its own isolated database seeded with a tenancy, a TenantUser,
+/// and a small private subnet (10.0.0.0/29 = 6 usable IPs) so tests can exercise the
+/// full allocation/release cycle.
 ///
 /// Tests cover: single allocation, listing, release, bulk allocation (success and
 /// 409 when subnet is exhausted), and unauthenticated 401.
 /// </summary>
-public class AllocationsControllerTests : IAsyncLifetime
+public abstract class AllocationsControllerTestsBase : IAsyncLifetime
 {
 	/// <summary>Shared factory that owns the test web server and database.</summary>
-	private readonly TestWebApplicationFactory _factory;
+	protected readonly TestWebApplicationFactory Factory;
 
 	/// <summary>HTTP client pre-authenticated as a TenantUser.</summary>
 	private HttpClient _tenantUserClient = null!;
@@ -33,11 +36,13 @@ public class AllocationsControllerTests : IAsyncLifetime
 	private Guid _tenancyId;
 
 	/// <summary>
-	/// Initialises a new instance of <see cref="AllocationsControllerTests"/>.
+	/// Initialises a new instance of <see cref="AllocationsControllerTestsBase"/>
+	/// using the supplied provider-specific factory.
 	/// </summary>
-	public AllocationsControllerTests()
+	/// <param name="factory">Factory that controls which database engine is used.</param>
+	protected AllocationsControllerTestsBase(TestWebApplicationFactory factory)
 	{
-		_factory = new TestWebApplicationFactory();
+		Factory = factory;
 	}
 
 	/// <summary>
@@ -46,7 +51,7 @@ public class AllocationsControllerTests : IAsyncLifetime
 	/// </summary>
 	public async Task InitializeAsync()
 	{
-		await _factory.SeedDatabaseAsync(async (db, um) =>
+		await Factory.SeedDatabaseAsync(async (db, um) =>
 		{
 			var admin = new ApplicationUser
 			{
@@ -92,14 +97,14 @@ public class AllocationsControllerTests : IAsyncLifetime
 			await db.SaveChangesAsync();
 		});
 
-		_adminClient = _factory.CreateAuthenticatedClient("admin", "Test1234!");
-		_tenantUserClient = _factory.CreateAuthenticatedClient("tuser", "Test1234!");
+		_adminClient = Factory.CreateAuthenticatedClient("admin", "Test1234!");
+		_tenantUserClient = Factory.CreateAuthenticatedClient("tuser", "Test1234!");
 	}
 
 	/// <summary>Disposes the factory after all tests in the class have run.</summary>
 	public Task DisposeAsync()
 	{
-		_factory.Dispose();
+		Factory.Dispose();
 		return Task.CompletedTask;
 	}
 
@@ -200,9 +205,46 @@ public class AllocationsControllerTests : IAsyncLifetime
 	public async Task Allocate_Unauthenticated_Returns401()
 	{
 		// Use a raw client with no auth header.
-		var client = _factory.CreateClient();
+		var client = Factory.CreateClient();
 		var req = new AllocateRequest(_subnetId, "test");
 		var response = await client.PostAsJsonAsync("/api/allocations", req);
 		Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
 	}
+}
+
+/// <summary>
+/// Runs <see cref="AllocationsControllerTestsBase"/> against an isolated SQLite file database.
+/// </summary>
+public class AllocationsControllerTests : AllocationsControllerTestsBase
+{
+	/// <summary>Initialises the tests with a per-instance SQLite file database.</summary>
+	public AllocationsControllerTests() : base(new TestWebApplicationFactory()) { }
+}
+
+/// <summary>
+/// Runs <see cref="AllocationsControllerTestsBase"/> against a MySQL Testcontainer database.
+/// </summary>
+[Collection("mysql")]
+public class AllocationsControllerMySqlTests : AllocationsControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a MySQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>mysql</c> collection.</param>
+	public AllocationsControllerMySqlTests(MySqlContainerFixture fixture)
+		: base(new MySqlTestWebApplicationFactory(fixture)) { }
+}
+
+/// <summary>
+/// Runs <see cref="AllocationsControllerTestsBase"/> against a PostgreSQL Testcontainer database.
+/// </summary>
+[Collection("postgres")]
+public class AllocationsControllerPostgresTests : AllocationsControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a PostgreSQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>postgres</c> collection.</param>
+	public AllocationsControllerPostgresTests(PostgresContainerFixture fixture)
+		: base(new PostgresTestWebApplicationFactory(fixture)) { }
 }

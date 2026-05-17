@@ -13,6 +13,7 @@ This service provides tenancy-isolated private subnet management, globally manag
 - [Configuration](#configuration)
 - [Getting Started](#getting-started)
 - [Running Tests](#running-tests)
+- [Migrations](#migrations)
 - [Docker](#docker)
 - [CI and Release Workflows](#ci-and-release-workflows)
 - [Project Layout](#project-layout)
@@ -58,7 +59,7 @@ It supports:
 | Identity store and password policy | ASP.NET Identity |
 | Authentication | Custom `BasicAuthHandler` (`AuthenticationHandler<AuthenticationSchemeOptions>`) |
 | API schema/docs | OpenAPI + Scalar (`/scalar` in Development) |
-| Database providers | SQLite, MySQL/MariaDB (Pomelo), PostgreSQL (Npgsql) |
+| Database providers | SQLite, MySQL/MariaDB (Oracle `MySql.EntityFrameworkCore`), PostgreSQL (Npgsql) |
 | Tests | Unit + Integration + System via `WebApplicationFactory<Program>` |
 
 ## Role and Access Model
@@ -167,15 +168,158 @@ If auth is missing/invalid, API returns `401` with `WWW-Authenticate: Basic`.
 
 ## Running Tests
 
+Tests are split into three categories:
+
+- `Unit` — pure logic, no I/O (allocation algorithm, subnet validation, basic auth handler).
+- `Integration` — controller-level tests with the full ASP.NET pipeline and a real database.
+- `System` — end-to-end scenario flows across multiple controllers and roles.
+
+### SQLite (default — no external dependencies)
+
+SQLite tests run entirely in-process with a per-test temporary file database. No Docker or database server required.
+
 ```bash
 dotnet test
 ```
 
-Test structure:
+To run only the SQLite suite explicitly (excludes the Testcontainer provider suites):
 
-- `Unit`: pure logic tests (allocation, subnet validation, basic auth handler).
-- `Integration`: controller-level tests with real app pipeline and database.
-- `System`: end-to-end scenarios across controllers and roles.
+```bash
+dotnet test --filter "FullyQualifiedName!~MySql&FullyQualifiedName!~Postgres"
+```
+
+### MySQL and PostgreSQL (Testcontainers — requires Docker)
+
+The MySQL and PostgreSQL suites use [Testcontainers for .NET](https://dotnet.testcontainers.org/) to spin up an ephemeral database server automatically. Docker (or a compatible runtime such as Podman with a Docker socket) must be running on the host.
+
+Each provider suite shares a single container for the entire test run. Every test class gets its own isolated database within that container, so tests are fully independent. Containers are started and stopped automatically — no manual setup is needed.
+
+**Run MySQL tests only:**
+
+```bash
+dotnet test --filter "FullyQualifiedName~MySql"
+```
+
+**Run PostgreSQL tests only:**
+
+```bash
+dotnet test --filter "FullyQualifiedName~Postgres"
+```
+
+**Run all three providers together:**
+
+```bash
+dotnet test
+```
+
+> The first run for each provider will pull the database Docker image (`mysql:8.0`, `postgres:16`). Subsequent runs use the cached image and start in seconds.
+
+### Filtering by test category
+
+```bash
+# Unit tests only (all providers)
+dotnet test --filter "FullyQualifiedName~Unit"
+
+# Integration tests only (all providers)
+dotnet test --filter "FullyQualifiedName~Integration"
+
+# System tests only (all providers)
+dotnet test --filter "FullyQualifiedName~System"
+```
+
+## Migrations
+
+Each database provider has its own set of EF Core migrations because schema syntax differs across providers. Migrations live under `src/Data/Migrations/` in provider-specific subdirectories:
+
+```
+src/Data/Migrations/
+├── SQLite/      — SqliteAppDbContext
+├── MySQL/       — MySqlAppDbContext
+└── Postgres/    — PostgresAppDbContext
+```
+
+The application applies pending migrations automatically on startup (`db.Database.Migrate()`), so there is no manual apply step required in normal operation.
+
+### Prerequisites
+
+Install the EF Core CLI tool if you do not already have it:
+
+```bash
+dotnet tool install --global dotnet-ef
+```
+
+### Generating a new migration
+
+Run the command for the provider(s) you want to update. Replace `<MigrationName>` with a descriptive name (e.g. `AddSubnetDescription`). All commands must be run from the repository root.
+
+**SQLite**
+
+```bash
+dotnet ef migrations add <MigrationName> \
+  --context SqliteAppDbContext \
+  --output-dir Data/Migrations/SQLite \
+  --project src/IpamService.csproj \
+  --startup-project src/IpamService.csproj
+```
+
+**MySQL / MariaDB**
+
+```bash
+dotnet ef migrations add <MigrationName> \
+  --context MySqlAppDbContext \
+  --output-dir Data/Migrations/MySQL \
+  --project src/IpamService.csproj \
+  --startup-project src/IpamService.csproj
+```
+
+The design-time factory connects to `Server=localhost;Port=3306;Database=ipam_design;User=root;Password=pass`. Adjust `src/Data/DesignTimeDbContextFactories.cs` if your local instance differs.
+
+**PostgreSQL**
+
+```bash
+dotnet ef migrations add <MigrationName> \
+  --context PostgresAppDbContext \
+  --output-dir Data/Migrations/Postgres \
+  --project src/IpamService.csproj \
+  --startup-project src/IpamService.csproj
+```
+
+The design-time factory connects to `Host=localhost;Port=5432;Database=ipam_design;Username=postgres;Password=pass`. Adjust `src/Data/DesignTimeDbContextFactories.cs` if your local instance differs.
+
+### Applying migrations manually
+
+Migrations are applied automatically at startup, but you can apply them manually (e.g. in CI or to check what would run) using:
+
+```bash
+# SQLite
+dotnet ef database update \
+  --context SqliteAppDbContext \
+  --project src/IpamService.csproj \
+  --startup-project src/IpamService.csproj
+
+# MySQL / MariaDB
+dotnet ef database update \
+  --context MySqlAppDbContext \
+  --project src/IpamService.csproj \
+  --startup-project src/IpamService.csproj
+
+# PostgreSQL
+dotnet ef database update \
+  --context PostgresAppDbContext \
+  --project src/IpamService.csproj \
+  --startup-project src/IpamService.csproj
+```
+
+### Removing the last migration
+
+If you generated a migration by mistake and it has not been applied to any database, remove it with:
+
+```bash
+dotnet ef migrations remove \
+  --context <ContextName> \
+  --project src/IpamService.csproj \
+  --startup-project src/IpamService.csproj
+```
 
 ## Docker
 

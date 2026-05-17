@@ -7,17 +7,17 @@ using IpamService.Tests.Helpers;
 namespace IpamService.Tests.Integration.Controllers;
 
 /// <summary>
-/// Integration tests for <c>UsersController</c>. Each test class instance owns
-/// its own isolated SQLite database. The database is seeded with a GlobalAdmin,
-/// a tenancy, and a TenantAdmin so tests can exercise both role perspectives.
+/// Abstract base class containing all integration tests for <c>UsersController</c>.
+/// Concrete subclasses supply the factory so the same test logic runs against SQLite,
+/// MySQL, and PostgreSQL without duplication.
 ///
 /// Tests cover: listing users as GlobalAdmin vs TenantAdmin, creating users with
 /// correct and incorrect role/tenancy combinations, and permission enforcement.
 /// </summary>
-public class UsersControllerTests : IAsyncLifetime
+public abstract class UsersControllerTestsBase : IAsyncLifetime
 {
 	/// <summary>Shared factory that owns the test web server and database.</summary>
-	private readonly TestWebApplicationFactory _factory;
+	protected readonly TestWebApplicationFactory Factory;
 
 	/// <summary>HTTP client pre-authenticated as GlobalAdmin.</summary>
 	private HttpClient _adminClient = null!;
@@ -29,11 +29,13 @@ public class UsersControllerTests : IAsyncLifetime
 	private Guid _tenancyId;
 
 	/// <summary>
-	/// Initialises a new instance of <see cref="UsersControllerTests"/>.
+	/// Initialises a new instance of <see cref="UsersControllerTestsBase"/> using
+	/// the supplied provider-specific factory.
 	/// </summary>
-	public UsersControllerTests()
+	/// <param name="factory">Factory that controls which database engine is used.</param>
+	protected UsersControllerTestsBase(TestWebApplicationFactory factory)
 	{
-		_factory = new TestWebApplicationFactory();
+		Factory = factory;
 	}
 
 	/// <summary>
@@ -42,7 +44,7 @@ public class UsersControllerTests : IAsyncLifetime
 	/// </summary>
 	public async Task InitializeAsync()
 	{
-		await _factory.SeedDatabaseAsync(async (db, um) =>
+		await Factory.SeedDatabaseAsync(async (db, um) =>
 		{
 			// GlobalAdmin — no tenancy affiliation.
 			var admin = new ApplicationUser
@@ -77,14 +79,14 @@ public class UsersControllerTests : IAsyncLifetime
 			await db.SaveChangesAsync();
 		});
 
-		_adminClient = _factory.CreateAuthenticatedClient("admin", "Test1234!");
-		_tenantAdminClient = _factory.CreateAuthenticatedClient("tadmin", "Test1234!");
+		_adminClient = Factory.CreateAuthenticatedClient("admin", "Test1234!");
+		_tenantAdminClient = Factory.CreateAuthenticatedClient("tadmin", "Test1234!");
 	}
 
 	/// <summary>Disposes the factory after all tests in the class have run.</summary>
 	public Task DisposeAsync()
 	{
-		_factory.Dispose();
+		Factory.Dispose();
 		return Task.CompletedTask;
 	}
 
@@ -143,4 +145,41 @@ public class UsersControllerTests : IAsyncLifetime
 		var response = await _tenantAdminClient.PostAsJsonAsync("/api/users", req);
 		Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
 	}
+}
+
+/// <summary>
+/// Runs <see cref="UsersControllerTestsBase"/> against an isolated SQLite file database.
+/// </summary>
+public class UsersControllerTests : UsersControllerTestsBase
+{
+	/// <summary>Initialises the tests with a per-instance SQLite file database.</summary>
+	public UsersControllerTests() : base(new TestWebApplicationFactory()) { }
+}
+
+/// <summary>
+/// Runs <see cref="UsersControllerTestsBase"/> against a MySQL Testcontainer database.
+/// </summary>
+[Collection("mysql")]
+public class UsersControllerMySqlTests : UsersControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a MySQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>mysql</c> collection.</param>
+	public UsersControllerMySqlTests(MySqlContainerFixture fixture)
+		: base(new MySqlTestWebApplicationFactory(fixture)) { }
+}
+
+/// <summary>
+/// Runs <see cref="UsersControllerTestsBase"/> against a PostgreSQL Testcontainer database.
+/// </summary>
+[Collection("postgres")]
+public class UsersControllerPostgresTests : UsersControllerTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a PostgreSQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>postgres</c> collection.</param>
+	public UsersControllerPostgresTests(PostgresContainerFixture fixture)
+		: base(new PostgresTestWebApplicationFactory(fixture)) { }
 }

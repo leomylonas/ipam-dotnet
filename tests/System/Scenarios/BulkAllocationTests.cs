@@ -7,15 +7,18 @@ using IpamService.Tests.Helpers;
 namespace IpamService.Tests.System.Scenarios;
 
 /// <summary>
-/// End-to-end system tests for bulk IP allocation scenarios. A /28 subnet
-/// (14 usable IPs) is used as the target so tests can verify bulk success,
-/// individual release within a bulk group, and failure when the requested
+/// Abstract base class for end-to-end bulk IP allocation scenario tests. Concrete
+/// subclasses supply the factory so the same scenarios run against SQLite, MySQL,
+/// and PostgreSQL without duplicating test logic.
+///
+/// A /28 subnet (14 usable IPs) is used as the target so tests can verify bulk
+/// success, individual release within a bulk group, and failure when the requested
 /// block size exceeds availability.
 /// </summary>
-public class BulkAllocationTests : IAsyncLifetime
+public abstract class BulkAllocationTestsBase : IAsyncLifetime
 {
 	/// <summary>Shared factory that owns the test web server and database.</summary>
-	private readonly TestWebApplicationFactory _factory;
+	protected readonly TestWebApplicationFactory Factory;
 
 	/// <summary>HTTP client pre-authenticated as a TenantUser.</summary>
 	private HttpClient _tenantUserClient = null!;
@@ -24,11 +27,13 @@ public class BulkAllocationTests : IAsyncLifetime
 	private Guid _subnetId;
 
 	/// <summary>
-	/// Initialises a new instance of <see cref="BulkAllocationTests"/>.
+	/// Initialises a new instance of <see cref="BulkAllocationTestsBase"/> using the
+	/// supplied provider-specific factory.
 	/// </summary>
-	public BulkAllocationTests()
+	/// <param name="factory">Factory that controls which database engine is used.</param>
+	protected BulkAllocationTestsBase(TestWebApplicationFactory factory)
 	{
-		_factory = new TestWebApplicationFactory();
+		Factory = factory;
 	}
 
 	/// <summary>
@@ -37,7 +42,7 @@ public class BulkAllocationTests : IAsyncLifetime
 	/// </summary>
 	public async Task InitializeAsync()
 	{
-		await _factory.SeedDatabaseAsync(async (db, um) =>
+		await Factory.SeedDatabaseAsync(async (db, um) =>
 		{
 			var tenancy = new Tenancy
 			{
@@ -74,13 +79,13 @@ public class BulkAllocationTests : IAsyncLifetime
 			await db.SaveChangesAsync();
 		});
 
-		_tenantUserClient = _factory.CreateAuthenticatedClient("buser", "Test1234!");
+		_tenantUserClient = Factory.CreateAuthenticatedClient("buser", "Test1234!");
 	}
 
 	/// <summary>Disposes the factory after all tests in the class have run.</summary>
 	public Task DisposeAsync()
 	{
-		_factory.Dispose();
+		Factory.Dispose();
 		return Task.CompletedTask;
 	}
 
@@ -143,4 +148,41 @@ public class BulkAllocationTests : IAsyncLifetime
 			new BulkAllocateRequest(_subnetId, 15, "too-many"));
 		Assert.Equal(HttpStatusCode.Conflict, resp.StatusCode);
 	}
+}
+
+/// <summary>
+/// Runs <see cref="BulkAllocationTestsBase"/> against an isolated SQLite file database.
+/// </summary>
+public class BulkAllocationTests : BulkAllocationTestsBase
+{
+	/// <summary>Initialises the tests with a per-instance SQLite file database.</summary>
+	public BulkAllocationTests() : base(new TestWebApplicationFactory()) { }
+}
+
+/// <summary>
+/// Runs <see cref="BulkAllocationTestsBase"/> against a MySQL Testcontainer database.
+/// </summary>
+[Collection("mysql")]
+public class BulkAllocationMySqlTests : BulkAllocationTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a MySQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>mysql</c> collection.</param>
+	public BulkAllocationMySqlTests(MySqlContainerFixture fixture)
+		: base(new MySqlTestWebApplicationFactory(fixture)) { }
+}
+
+/// <summary>
+/// Runs <see cref="BulkAllocationTestsBase"/> against a PostgreSQL Testcontainer database.
+/// </summary>
+[Collection("postgres")]
+public class BulkAllocationPostgresTests : BulkAllocationTestsBase
+{
+	/// <summary>
+	/// Initialises the tests with a PostgreSQL-backed factory.
+	/// </summary>
+	/// <param name="fixture">Injected by xUnit from the <c>postgres</c> collection.</param>
+	public BulkAllocationPostgresTests(PostgresContainerFixture fixture)
+		: base(new PostgresTestWebApplicationFactory(fixture)) { }
 }

@@ -1,6 +1,6 @@
-bin/
-obj/
-*.Tests/
+**/bin/
+**/obj/
+tests/
 .git/
 .github/
 *.md
