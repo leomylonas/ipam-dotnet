@@ -11,6 +11,7 @@ This service provides tenancy-isolated private subnet management, globally manag
 - [Architecture and Stack](#architecture-and-stack)
 - [Role and Access Model](#role-and-access-model)
 - [Configuration](#configuration)
+- [Logging](#logging)
 - [Getting Started](#getting-started)
 - [Running Tests](#running-tests)
 - [Migrations](#migrations)
@@ -82,8 +83,8 @@ Configuration is file-driven via `appsettings*.json`.
 | `Database:ConnectionString` | `string` | Yes | `Data Source=ipam.db` | Provider-specific connection string. |
 | `Seed:AdminUsername` | `string` | Yes | `admin` | GlobalAdmin username used at startup if that user does not already exist. |
 | `Seed:AdminPassword` | `string` | Yes | `Admin1234!` | GlobalAdmin bootstrap password (must satisfy Identity policy). Not used to rotate existing password. |
-| `Logging:LogLevel:Default` | `string` | No | `Information` | Default log level for app logging. |
-| `Logging:LogLevel:Microsoft.AspNetCore` | `string` | No | `Warning` | ASP.NET Core log level override. |
+| `Serilog:MinimumLevel:Default` | `string` | No | `Information` | Default minimum log level. |
+| `Serilog:MinimumLevel:Override:*` | `string` | No | `Warning` | Per-namespace level overrides (see [Logging](#logging) section). |
 | `AllowedHosts` | `string` | No | `*` | Standard ASP.NET host filtering setting. |
 
 ### Identity Password Policy (configured in code)
@@ -98,14 +99,63 @@ Configuration is file-driven via `appsettings*.json`.
 
 ### Test Configuration
 
-`tests/IpamService.Tests/appsettings.Test.json`:
+Tests use `TestWebApplicationFactory`, which injects configuration directly in code and does not rely on an `appsettings.Test.json` file. Each test class gets its own isolated database:
 
-| Key (`appsettings`) | Example | Purpose |
-|---|---|---|
-| `Database:Provider` | `sqlite` | Test provider selection. |
-| `Database:ConnectionString` | `Data Source=:memory:` | Test database connection string. |
-| `Seed:AdminUsername` | `admin` | Seed admin for tests. |
-| `Seed:AdminPassword` | `Test1234!` | Seed admin password for tests. |
+- **SQLite** — a unique temp file per factory instance, deleted after the test class finishes.
+- **MySQL / PostgreSQL** — a unique database name per factory instance within the shared Testcontainer, cleaned up when the container is destroyed.
+
+The seed admin is suppressed during tests via a placeholder username so it does not conflict with test-controlled users.
+
+## Logging
+
+Logging uses [Serilog](https://serilog.net/) with an async-wrapped console sink. The sink pipeline and log context enrichment are fixed in code; only the minimum levels are configurable.
+
+### Log levels
+
+Levels are set in the `Serilog:MinimumLevel` configuration section. The default `appsettings.json` ships with these values:
+
+```json
+"Serilog": {
+  "MinimumLevel": {
+    "Default": "Information",
+    "Override": {
+      "Microsoft": "Warning",
+      "Microsoft.Hosting.Lifetime": "Information",
+      "Microsoft.EntityFrameworkCore": "Warning"
+    }
+  }
+}
+```
+
+Valid level names (from least to most verbose): `Fatal`, `Error`, `Warning`, `Information`, `Debug`, `Verbose`.
+
+### Overriding levels at runtime
+
+Use environment variables with `__` as the section separator:
+
+```bash
+# Raise the default level to Debug
+Serilog__MinimumLevel__Default=Debug
+
+# Suppress all EF Core output
+Serilog__MinimumLevel__Override__Microsoft.EntityFrameworkCore=Fatal
+
+# Enable verbose output for a specific namespace
+Serilog__MinimumLevel__Override__IpamService=Debug
+```
+
+In Docker, pass these with `-e`:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e Serilog__MinimumLevel__Default=Debug \
+  ... \
+  ipam-service
+```
+
+### Sink
+
+The console sink is wrapped in an async sink so log writes are offloaded to a background thread and do not block request handling. This is fixed in code and cannot be changed via configuration.
 
 ## Getting Started
 

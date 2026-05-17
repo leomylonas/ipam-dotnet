@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
+using Serilog;
 
 // ── Composition root ─────────────────────────────────────────────────────────
 // Everything before app.Build() registers services into the DI container.
@@ -16,6 +17,18 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Shorthand reference so we don't have to write builder.Configuration everywhere.
 var config = builder.Configuration;
+
+// ── Logging (Serilog) ─────────────────────────────────────────────────────────
+// Replace the default Microsoft.Extensions.Logging pipeline with Serilog.
+// Minimum levels are read from the "Serilog" configuration section so they can
+// be adjusted via appsettings.json or environment variables without redeployment.
+// The sink pipeline (async-wrapped console) and enrichers are hard-coded here
+// because they are infrastructure concerns, not operational tunables.
+builder.Host.UseSerilog((ctx, cfg) =>
+	cfg
+		.ReadFrom.Configuration(ctx.Configuration)
+		.Enrich.FromLogContext()
+		.WriteTo.Async(a => a.Console()));
 
 // ── Database provider selection ───────────────────────────────────────────────
 // The provider and connection string are read from configuration so that the

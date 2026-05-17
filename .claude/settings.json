@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet add *)",
+      "Bash(dotnet build *)",
+      "Bash(dotnet ef *)",
+      "Bash(dotnet list *)",
+      "Bash(dotnet remove *)",
+      "Bash(dotnet script *)",
+      "Bash(dotnet test *)",
+      "Bash(dotnet tool *)",
+      "Bash(xargs cat)"
+    ]
+  }
+}
