@@ -25,7 +25,9 @@ jobs:
         run: dotnet build --no-restore
 
       - name: Test
-        run: dotnet test --no-build --logger "trx;LogFileName=test-results.trx"
+        # Exclude MySQL and Postgres suites — those use Testcontainers and require
+        # a Docker daemon. Only the SQLite suite runs in CI.
+        run: dotnet test --no-build --filter "FullyQualifiedName!~MySql&FullyQualifiedName!~Postgres" --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
