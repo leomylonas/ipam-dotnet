@@ -373,6 +373,40 @@ dotnet ef migrations remove \
 
 ## Docker
 
+### Pre-built image (GHCR)
+
+Pre-built images are published to the GitHub Container Registry on every tagged release:
+
+```
+ghcr.io/leomylonas/dotnet-ipam
+```
+
+Available tags:
+
+| Tag | Description |
+|---|---|
+| `latest` | Most recent stable release |
+| `v1.2.3` | Specific release version |
+
+Pull the latest image:
+
+```bash
+docker pull ghcr.io/leomylonas/dotnet-ipam:latest
+```
+
+Run the pre-built container:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -e Database__Provider=sqlite \
+  -e Database__ConnectionString='Data Source=ipam.db' \
+  -e Seed__AdminUsername=admin \
+  -e Seed__AdminPassword='Admin1234!' \
+  ghcr.io/leomylonas/dotnet-ipam:latest
+```
+
+### Building locally
+
 Build image:
 
 ```bash
