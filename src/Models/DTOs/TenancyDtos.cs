@@ -17,6 +17,16 @@ public record CreateTenancyRequest(
 );
 
 /// <summary>
+/// Request body for PUT /api/tenancies/{id}.
+/// </summary>
+/// <param name="Name">Unique display name for the tenancy.</param>
+/// <param name="Description">Free-form description.</param>
+public record UpdateTenancyRequest(
+	string Name,
+	string Description
+);
+
+/// <summary>
 /// Response shape returned when listing or creating tenancies.
 /// </summary>
 /// <param name="Id">The tenancy's unique identifier.</param>

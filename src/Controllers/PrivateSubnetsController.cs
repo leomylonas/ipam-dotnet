@@ -166,6 +166,40 @@ public class PrivateSubnetsController : ControllerBase
 	}
 
 	/// <summary>
+	/// Updates mutable attributes of a private subnet. CIDR is immutable.
+	/// </summary>
+	/// <param name="tenancyId">The ID of the owning tenancy.</param>
+	/// <param name="subnetId">The ID of the subnet to update.</param>
+	/// <param name="req">Request body with updated name and description.</param>
+	/// <returns>
+	/// <c>200 OK</c> with the updated subnet on success;
+	/// <c>403 Forbidden</c> if the caller cannot manage this tenancy;
+	/// <c>404 Not Found</c> if the subnet does not exist in this tenancy.
+	/// </returns>
+	[HttpPut("{subnetId:guid}")]
+	public async Task<IActionResult> Update(Guid tenancyId, Guid subnetId, [FromBody] UpdateSubnetRequest req)
+	{
+		if (!CanAccessTenancy(tenancyId))
+		{
+			return Forbid();
+		}
+
+		var subnet = await _db.Subnets.FirstOrDefaultAsync(s =>
+			s.Id == subnetId && s.TenancyId == tenancyId && s.Type == SubnetType.Private);
+		if (subnet is null)
+		{
+			return NotFound();
+		}
+
+		subnet.Name = req.Name;
+		subnet.Description = req.Description;
+		await _db.SaveChangesAsync();
+
+		return Ok(new SubnetResponse(subnet.Id, subnet.Cidr, subnet.Name, subnet.Description,
+			subnet.Type.ToString(), subnet.TenancyId, subnet.CreatedAt));
+	}
+
+	/// <summary>
 	/// Deletes a private subnet and all associated exclusions and allocations.
 	/// The subnet must belong to the specified tenancy.
 	/// </summary>

@@ -143,6 +143,23 @@ public abstract class SharedSubnetsControllerTestsBase : IAsyncLifetime
 			$"/api/subnets/shared/{subnet.Id}/access/{_tenancyId}");
 		Assert.Equal(HttpStatusCode.NoContent, revokeResp.StatusCode);
 	}
+
+	[Fact]
+	public async Task UpdateSharedSubnet_ReturnsOk()
+	{
+		var createReq = new CreateSubnetRequest("172.20.0.0/24", "BeforeName", "BeforeDesc");
+		var createResp = await _adminClient.PostAsJsonAsync("/api/subnets/shared", createReq);
+		var subnet = await createResp.Content.ReadFromJsonAsync<SubnetResponse>();
+
+		var updateReq = new UpdateSubnetRequest("AfterName", "AfterDesc");
+		var updateResp = await _adminClient.PutAsJsonAsync($"/api/subnets/shared/{subnet!.Id}", updateReq);
+		Assert.Equal(HttpStatusCode.OK, updateResp.StatusCode);
+
+		var updated = await updateResp.Content.ReadFromJsonAsync<SubnetResponse>();
+		Assert.Equal("AfterName", updated!.Name);
+		Assert.Equal("AfterDesc", updated.Description);
+		Assert.Equal("172.20.0.0/24", updated.Cidr);
+	}
 }
 
 /// <summary>

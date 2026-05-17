@@ -137,6 +137,33 @@ public class SharedSubnetsController : ControllerBase
 	}
 
 	/// <summary>
+	/// Updates mutable attributes of a shared subnet. CIDR is immutable.
+	/// </summary>
+	/// <param name="id">The ID of the shared subnet to update.</param>
+	/// <param name="req">Request body with updated name and description.</param>
+	/// <returns>
+	/// <c>200 OK</c> with the updated subnet on success;
+	/// <c>404 Not Found</c> if the subnet does not exist or is not shared.
+	/// </returns>
+	[HttpPut("{id:guid}")]
+	[Authorize(Roles = "GlobalAdmin")]
+	public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSubnetRequest req)
+	{
+		var subnet = await _db.Subnets.FirstOrDefaultAsync(s => s.Id == id && s.Type == SubnetType.Shared);
+		if (subnet is null)
+		{
+			return NotFound();
+		}
+
+		subnet.Name = req.Name;
+		subnet.Description = req.Description;
+		await _db.SaveChangesAsync();
+
+		return Ok(new SubnetResponse(subnet.Id, subnet.Cidr, subnet.Name, subnet.Description,
+			subnet.Type.ToString(), subnet.TenancyId, subnet.CreatedAt));
+	}
+
+	/// <summary>
 	/// Deletes a shared subnet and all its associated exclusions, allocations,
 	/// and tenancy access rules. This operation is irreversible.
 	/// </summary>

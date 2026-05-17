@@ -15,6 +15,15 @@ public record CreateExclusionRequest(
 );
 
 /// <summary>
+/// Request body for PUT /api/subnets/{subnetId}/exclusions/{id}. Range bounds
+/// remain immutable; only the description is editable.
+/// </summary>
+/// <param name="Description">Human-readable reason for the exclusion.</param>
+public record UpdateExclusionRequest(
+	string Description
+);
+
+/// <summary>
 /// Response shape returned when listing or creating exclusions.
 /// </summary>
 /// <param name="Id">The exclusion's unique identifier.</param>

@@ -152,6 +152,57 @@ public class UsersController : ControllerBase
 	}
 
 	/// <summary>
+	/// Updates mutable profile fields for an existing user. Password changes are
+	/// handled by dedicated password endpoints.
+	/// </summary>
+	/// <param name="id">The Identity user ID to update.</param>
+	/// <param name="req">Request body with updated username, role, and tenancy.</param>
+	/// <returns>
+	/// <c>200 OK</c> with updated user details on success;
+	/// <c>404 Not Found</c> if the user does not exist;
+	/// <c>403 Forbidden</c> if the caller lacks permission for the requested change;
+	/// <c>400 Bad Request</c> if Identity rejects the username update.
+	/// </returns>
+	[HttpPut("{id}")]
+	public async Task<IActionResult> Update(string id, [FromBody] UpdateUserRequest req)
+	{
+		var user = await _userManager.FindByIdAsync(id);
+		if (user is null)
+		{
+			return NotFound();
+		}
+
+		if (CallerRole == "GlobalAdmin")
+		{
+			// GlobalAdmin may update any user.
+		}
+		else if (CallerRole == "TenantAdmin")
+		{
+			if (user.TenancyId != CallerTenancyId || req.TenancyId != CallerTenancyId || req.Role != "TenantUser")
+			{
+				return Forbid();
+			}
+		}
+		else
+		{
+			return Forbid();
+		}
+
+		user.UserName = req.Username;
+		user.Email = req.Username;
+		user.Role = req.Role;
+		user.TenancyId = req.TenancyId;
+
+		var result = await _userManager.UpdateAsync(user);
+		if (!result.Succeeded)
+		{
+			return BadRequest(result.Errors.Select(e => e.Description));
+		}
+
+		return Ok(new UserResponse(user.Id, user.UserName!, user.Role, user.TenancyId));
+	}
+
+	/// <summary>
 	/// Deletes a user account. GlobalAdmin can delete any user; TenantAdmin can
 	/// delete users within their own tenancy only.
 	/// </summary>

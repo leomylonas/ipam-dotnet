@@ -15,6 +15,17 @@ public record CreateSubnetRequest(
 );
 
 /// <summary>
+/// Request body for subnet update endpoints. CIDR is intentionally excluded and
+/// remains immutable once created.
+/// </summary>
+/// <param name="Name">Human-readable label for the subnet.</param>
+/// <param name="Description">Free-form description of the subnet's purpose.</param>
+public record UpdateSubnetRequest(
+	string Name,
+	string Description
+);
+
+/// <summary>
 /// Response shape returned when listing or creating subnets.
 /// </summary>
 /// <param name="Id">The subnet's unique identifier.</param>

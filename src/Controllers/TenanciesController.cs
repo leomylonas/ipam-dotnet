@@ -121,6 +121,37 @@ public class TenanciesController : ControllerBase
 	}
 
 	/// <summary>
+	/// Updates an existing tenancy's mutable fields.
+	/// </summary>
+	/// <param name="id">The ID of the tenancy to update.</param>
+	/// <param name="req">Request body with updated tenancy name and description.</param>
+	/// <returns>
+	/// <c>200 OK</c> with the updated tenancy on success;
+	/// <c>404 Not Found</c> if the tenancy does not exist;
+	/// <c>409 Conflict</c> if the new name collides with another tenancy.
+	/// </returns>
+	[HttpPut("{id:guid}")]
+	public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTenancyRequest req)
+	{
+		var tenancy = await _db.Tenancies.FindAsync(id);
+		if (tenancy is null)
+		{
+			return NotFound();
+		}
+
+		if (await _db.Tenancies.AnyAsync(t => t.Id != id && t.Name == req.Name))
+		{
+			return Conflict($"Tenancy '{req.Name}' already exists");
+		}
+
+		tenancy.Name = req.Name;
+		tenancy.Description = req.Description;
+		await _db.SaveChangesAsync();
+
+		return Ok(new TenancyResponse(tenancy.Id, tenancy.Name, tenancy.Description, tenancy.CreatedAt));
+	}
+
+	/// <summary>
 	/// Deletes a tenancy and all data associated with it: users, private subnets,
 	/// allocations, exclusions, subnet access rules, and audit log entries.
 	/// This operation is irreversible.

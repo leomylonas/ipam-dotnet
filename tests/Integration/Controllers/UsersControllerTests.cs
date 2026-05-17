@@ -145,6 +145,35 @@ public abstract class UsersControllerTestsBase : IAsyncLifetime
 		var response = await _tenantAdminClient.PostAsJsonAsync("/api/users", req);
 		Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
 	}
+
+	[Fact]
+	public async Task UpdateUser_AsGlobalAdmin_ReturnsOk()
+	{
+		var createReq = new CreateUserRequest("update-user", "Test1234!", "TenantUser", _tenancyId);
+		var createResp = await _adminClient.PostAsJsonAsync("/api/users", createReq);
+		var created = await createResp.Content.ReadFromJsonAsync<UserResponse>();
+
+		var updateReq = new UpdateUserRequest("update-user-renamed", "TenantAdmin", _tenancyId);
+		var updateResp = await _adminClient.PutAsJsonAsync($"/api/users/{created!.Id}", updateReq);
+
+		Assert.Equal(HttpStatusCode.OK, updateResp.StatusCode);
+		var updated = await updateResp.Content.ReadFromJsonAsync<UserResponse>();
+		Assert.Equal("update-user-renamed", updated!.Username);
+		Assert.Equal("TenantAdmin", updated.Role);
+	}
+
+	[Fact]
+	public async Task UpdateUser_AsTenantAdmin_CannotEscalateRole_ReturnsForbidden()
+	{
+		var createReq = new CreateUserRequest("tenant-update-user", "Test1234!", "TenantUser", _tenancyId);
+		var createResp = await _adminClient.PostAsJsonAsync("/api/users", createReq);
+		var created = await createResp.Content.ReadFromJsonAsync<UserResponse>();
+
+		var updateReq = new UpdateUserRequest("tenant-update-user2", "TenantAdmin", _tenancyId);
+		var updateResp = await _tenantAdminClient.PutAsJsonAsync($"/api/users/{created!.Id}", updateReq);
+
+		Assert.Equal(HttpStatusCode.Forbidden, updateResp.StatusCode);
+	}
 }
 
 /// <summary>

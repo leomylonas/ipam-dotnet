@@ -196,6 +196,44 @@ public class ExclusionsController : ControllerBase
 	}
 
 	/// <summary>
+	/// Updates an exclusion description. Range bounds are immutable.
+	/// </summary>
+	/// <param name="subnetId">The ID of the subnet that owns the exclusion.</param>
+	/// <param name="id">The ID of the exclusion to update.</param>
+	/// <param name="req">Request body with updated description.</param>
+	/// <returns>
+	/// <c>200 OK</c> with the updated exclusion on success;
+	/// <c>403 Forbidden</c> if the caller cannot write to this subnet;
+	/// <c>404 Not Found</c> if the subnet or exclusion does not exist.
+	/// </returns>
+	[HttpPut("{id:guid}")]
+	public async Task<IActionResult> Update(Guid subnetId, Guid id, [FromBody] UpdateExclusionRequest req)
+	{
+		var (subnet, forbidden) = await GetAuthorizedSubnetAsync(subnetId, requireWrite: true);
+		if (forbidden)
+		{
+			return Forbid();
+		}
+
+		if (subnet is null)
+		{
+			return NotFound();
+		}
+
+		var exclusion = await _db.Exclusions.FirstOrDefaultAsync(e => e.Id == id && e.SubnetId == subnetId);
+		if (exclusion is null)
+		{
+			return NotFound();
+		}
+
+		exclusion.Description = req.Description;
+		await _db.SaveChangesAsync();
+
+		return Ok(new ExclusionResponse(exclusion.Id, exclusion.SubnetId, exclusion.Start,
+			exclusion.End, exclusion.Description));
+	}
+
+	/// <summary>
 	/// Removes a single exclusion range from a subnet by its ID.
 	/// </summary>
 	/// <param name="subnetId">The ID of the subnet that owns the exclusion.</param>

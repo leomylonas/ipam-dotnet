@@ -17,6 +17,19 @@ public record CreateUserRequest(
 );
 
 /// <summary>
+/// Request body for PUT /api/users/{id}. Only non-password profile fields are
+/// updated here; password changes are handled by dedicated endpoints.
+/// </summary>
+/// <param name="Username">New login username.</param>
+/// <param name="Role">Role to assign. Allowed values: GlobalAdmin, TenantAdmin, TenantUser.</param>
+/// <param name="TenancyId">Tenancy affiliation. Must be null for GlobalAdmin.</param>
+public record UpdateUserRequest(
+	string Username,
+	string Role,
+	Guid? TenancyId
+);
+
+/// <summary>
 /// Response shape returned when listing or creating users.
 /// Passwords are never included in responses.
 /// </summary>

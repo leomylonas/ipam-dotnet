@@ -143,6 +143,38 @@ public abstract class TenanciesControllerTestsBase : IAsyncLifetime
 		var response = await _adminClient.DeleteAsync($"/api/tenancies/{Guid.NewGuid()}");
 		Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 	}
+
+	[Fact]
+	public async Task UpdateTenancy_ReturnsOk()
+	{
+		var createReq = new CreateTenancyRequest("UpdateMe", "Before", "update-admin", "Test1234!");
+		var createResponse = await _adminClient.PostAsJsonAsync("/api/tenancies", createReq);
+		var tenancy = await createResponse.Content.ReadFromJsonAsync<TenancyResponse>();
+
+		var updateReq = new UpdateTenancyRequest("UpdateMeRenamed", "After");
+		var updateResponse = await _adminClient.PutAsJsonAsync($"/api/tenancies/{tenancy!.Id}", updateReq);
+
+		Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
+		var updated = await updateResponse.Content.ReadFromJsonAsync<TenancyResponse>();
+		Assert.Equal("UpdateMeRenamed", updated!.Name);
+		Assert.Equal("After", updated.Description);
+	}
+
+	[Fact]
+	public async Task UpdateTenancy_DuplicateName_ReturnsConflict()
+	{
+		await _adminClient.PostAsJsonAsync("/api/tenancies",
+			new CreateTenancyRequest("TenancyA", "A", "ta-admin", "Test1234!"));
+		var secondCreate = await _adminClient.PostAsJsonAsync("/api/tenancies",
+			new CreateTenancyRequest("TenancyB", "B", "tb-admin", "Test1234!"));
+		var second = await secondCreate.Content.ReadFromJsonAsync<TenancyResponse>();
+
+		var response = await _adminClient.PutAsJsonAsync(
+			$"/api/tenancies/{second!.Id}",
+			new UpdateTenancyRequest("TenancyA", "Renamed"));
+
+		Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+	}
 }
 
 /// <summary>
