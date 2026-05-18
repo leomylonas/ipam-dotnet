@@ -47,6 +47,8 @@ All configuration is file-driven. No runtime admin UI for config.
 | `Database:ConnectionString` | `string` | Provider-appropriate connection string |
 | `Seed:AdminUsername` | `string` | Username for the bootstrapped GlobalAdmin user |
 | `Seed:AdminPassword` | `string` | Password for the bootstrapped GlobalAdmin user |
+| `Dashboard:ExhaustionThresholdPercent` | `double` | Utilisation % at or above which a subnet appears in exhaustion alerts. Default `80.0` |
+| `Ui:Enabled` | `bool` | When `true` (default), serves the React SPA from `wwwroot/` and falls back to `index.html`. When `false`, API-only mode. |
 
 On startup, if the GlobalAdmin user does not exist, it is created automatically from seed config.
 
@@ -172,7 +174,7 @@ When creating a tenancy, the request body must include initial TenantAdmin crede
 | `GET` | `/api/users` | GlobalAdmin: all users; TenantAdmin: own tenancy only | List users |
 | `POST` | `/api/users` | GlobalAdmin: any tenancy + any role; TenantAdmin: TenantUser only in own tenancy | Create user |
 | `DELETE` | `/api/users/{id}` | GlobalAdmin: any; TenantAdmin: own tenancy only | Delete user |
-| `PUT` | `/api/users/{id}/password` | GlobalAdmin: any; TenantAdmin: own tenancy; TenantUser: own ID only | Change password |
+| `PUT` | `/api/users/{id}` | GlobalAdmin: any; TenantAdmin: own tenancy; TenantUser: own ID (password only) | Update username, role, tenancyId, and optionally password. All fields except `password` are required. TenantUser callers may only supply `password` for their own ID. |
 
 ### Shared Subnets
 
@@ -191,6 +193,7 @@ When creating a tenancy, the request body must include initial TenantAdmin crede
 |---|---|---|---|
 | `GET` | `/api/tenancies/{id}/subnets` | TenantAdmin of that tenancy (or GlobalAdmin) | List private subnets |
 | `POST` | `/api/tenancies/{id}/subnets` | TenantAdmin of that tenancy (or GlobalAdmin) | Create private subnet (RFC1918 validated) |
+| `PUT` | `/api/tenancies/{id}/subnets/{subnetId}` | TenantAdmin of that tenancy (or GlobalAdmin) | Update private subnet name and description |
 | `DELETE` | `/api/tenancies/{id}/subnets/{subnetId}` | TenantAdmin of that tenancy (or GlobalAdmin) | Delete private subnet |
 
 ### Exclusions
@@ -199,6 +202,7 @@ When creating a tenancy, the request body must include initial TenantAdmin crede
 |---|---|---|---|
 | `GET` | `/api/subnets/{subnetId}/exclusions` | GlobalAdmin: any; TenantAdmin: own subnets | List exclusions |
 | `POST` | `/api/subnets/{subnetId}/exclusions` | GlobalAdmin: shared subnets; TenantAdmin: own private subnets | Add exclusion |
+| `PUT` | `/api/subnets/{subnetId}/exclusions/{id}` | GlobalAdmin: shared subnets; TenantAdmin: own private subnets | Update exclusion description |
 | `DELETE` | `/api/subnets/{subnetId}/exclusions/{id}` | GlobalAdmin: shared subnets; TenantAdmin: own private subnets | Remove exclusion |
 
 ### Allocations
@@ -233,6 +237,22 @@ Bulk allocations share a `BulkId` but are individually releasable, each with the
 |---|---|---|---|
 | `GET` | `/api/audit` | GlobalAdmin: all; TenantAdmin: own tenancy | List audit log entries, newest first |
 
+### Auth (UI session management)
+
+| Method | Route | Access | Description |
+|---|---|---|---|
+| `POST` | `/auth/login` | Public | Accepts `{ username, password }` JSON body; issues encrypted cookie on success |
+| `POST` | `/auth/logout` | Authenticated | Clears the auth cookie |
+| `GET` | `/auth/me` | Authenticated | Returns `{ id, username, role, tenancyId }` for the current caller |
+
+### Dashboard
+
+| Method | Route | Access | Description |
+|---|---|---|---|
+| `GET` | `/dashboard/global` | GlobalAdmin | System-wide stats, exhaustion alerts, and 10 recent audit entries |
+| `GET` | `/dashboard/tenant` | TenantAdmin | Tenancy-scoped stats, exhaustion alerts, and 10 recent audit entries |
+| `GET` | `/dashboard/user` | TenantUser | Accessible subnets with free IP counts and recent allocations |
+
 ### Health
 
 | Method | Route | Access | Description |
@@ -265,11 +285,24 @@ Bulk allocations share a `BulkId` but are individually releasable, each with the
 
 ## Authentication
 
-- Every request (except `/health`) requires an `Authorization: Basic <base64(user:pass)>` header
+Two schemes are accepted on all protected endpoints. Both are fully stateless from the server's perspective — no server-side session store is used.
+
+### Basic Auth (API consumers)
+- Every request may include an `Authorization: Basic <base64(user:pass)>` header
 - Credentials are validated against ASP.NET Identity on every request
-- No session, no cookie, no token issuance
 - Implemented as a custom `AuthenticationHandler` in `Auth/BasicAuthHandler.cs`
 - Returns `401` with `WWW-Authenticate: Basic` on failure
+
+### Cookie Auth (React UI)
+- `POST /auth/login` — accepts `{ username, password }` JSON body, issues an encrypted ASP.NET Core cookie on success
+- `POST /auth/logout` — clears the cookie
+- `GET /auth/me` — returns `{ id, username, role, tenancyId }` for the current session; used by the UI on page load to restore routing state
+- Cookie type: ASP.NET Core Data Protection encrypted cookie (stateless — no session store)
+- Cookie properties: `HttpOnly`, `SameSite=Strict`, 24-hour sliding expiration
+- Returns `401` (no redirect) on auth failure so the UI handles errors programmatically
+
+### Scheme routing
+A `PolicyScheme` named `"Combined"` is the default authenticate scheme. It forwards to `"Basic"` when an `Authorization` header is present, and to `"Cookie"` otherwise, so both schemes work transparently on every `[Authorize]` endpoint without extra annotation.
 
 ---
 

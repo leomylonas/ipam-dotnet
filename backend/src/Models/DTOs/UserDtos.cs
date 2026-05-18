@@ -17,16 +17,26 @@ public record CreateUserRequest(
 );
 
 /// <summary>
-/// Request body for PUT /api/users/{id}. Only non-password profile fields are
-/// updated here; password changes are handled by dedicated endpoints.
+/// Request body for PUT /api/users/{id}. Updates profile fields and, when
+/// <see cref="Password"/> is supplied, changes the password in the same request.
+/// All fields other than <see cref="Password"/> are required.
+///
+/// TenantUser callers may only supply <see cref="Password"/> and only for their
+/// own user ID. TenantAdmin callers may update users within their tenancy but
+/// cannot escalate them to a role higher than TenantUser.
 /// </summary>
 /// <param name="Username">New login username.</param>
 /// <param name="Role">Role to assign. Allowed values: GlobalAdmin, TenantAdmin, TenantUser.</param>
 /// <param name="TenancyId">Tenancy affiliation. Must be null for GlobalAdmin.</param>
+/// <param name="Password">
+/// Optional new password. When present the password is changed as part of the
+/// same request. Must meet the configured ASP.NET Identity password policy.
+/// </param>
 public record UpdateUserRequest(
 	string Username,
 	string Role,
-	Guid? TenancyId
+	Guid? TenancyId,
+	string? Password
 );
 
 /// <summary>
@@ -42,14 +52,4 @@ public record UserResponse(
 	string Username,
 	string Role,
 	Guid? TenancyId
-);
-
-/// <summary>
-/// Request body for password-change endpoints (PUT /api/auth/password and
-/// PUT /api/users/{id}/password). Old password is not required because
-/// privilege checks on the endpoint itself enforce authorization.
-/// </summary>
-/// <param name="NewPassword">The new password. Must meet the configured password policy.</param>
-public record ChangePasswordRequest(
-	string NewPassword
 );

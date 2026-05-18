@@ -68,9 +68,9 @@ public class BasicAuthHandler : AuthenticationHandler<AuthenticationSchemeOption
 			return AuthenticateResult.NoResult();
 		}
 
-		// Parse the header into scheme + parameter. We only handle "Basic" here.
+		// Parse the header into scheme + parameter. We only handle Basic here.
 		if (!AuthenticationHeaderValue.TryParse(authHeader, out var parsed) ||
-			!string.Equals(parsed.Scheme, "Basic", StringComparison.OrdinalIgnoreCase) ||
+			!string.Equals(parsed.Scheme, AuthConstants.Schemes.Basic, StringComparison.OrdinalIgnoreCase) ||
 			parsed.Parameter is null)
 		{
 			return AuthenticateResult.Fail("Invalid Authorization header");
@@ -131,7 +131,7 @@ public class BasicAuthHandler : AuthenticationHandler<AuthenticationSchemeOption
 		// check for the claim explicitly.
 		if (user.TenancyId.HasValue)
 		{
-			claims.Add(new Claim("TenancyId", user.TenancyId.Value.ToString()));
+			claims.Add(new Claim(AuthConstants.Claims.TenancyId, user.TenancyId.Value.ToString()));
 		}
 
 		// Wrap claims in an identity and principal, then package into a ticket
@@ -153,7 +153,7 @@ public class BasicAuthHandler : AuthenticationHandler<AuthenticationSchemeOption
 	protected override Task HandleChallengeAsync(AuthenticationProperties properties)
 	{
 		// Tell the client which authentication scheme to use on the next request.
-		Response.Headers.WWWAuthenticate = "Basic";
+		Response.Headers.WWWAuthenticate = AuthConstants.Schemes.Basic;
 		Response.StatusCode = 401;
 		return Task.CompletedTask;
 	}

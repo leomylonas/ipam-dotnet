@@ -39,7 +39,7 @@ public abstract class IpamControllerBase : ControllerBase
 		User.FindFirstValue(ClaimTypes.Role)!,
 		// TenancyId is a custom claim added alongside the standard ones.
 		// GlobalAdmin has no tenancy, so this may be null.
-		Guid.TryParse(User.FindFirstValue("TenancyId"), out var g) ? g : null
+		Guid.TryParse(User.FindFirstValue(Auth.AuthConstants.Claims.TenancyId), out var g) ? g : null
 	);
 
 	/// <summary>

@@ -25,8 +25,14 @@ public abstract class UsersControllerTestsBase : IAsyncLifetime
 	/// <summary>HTTP client pre-authenticated as a TenantAdmin of <see cref="_tenancyId"/>.</summary>
 	private HttpClient _tenantAdminClient = null!;
 
+	/// <summary>HTTP client pre-authenticated as a TenantUser of <see cref="_tenancyId"/>.</summary>
+	private HttpClient _tenantUserClient = null!;
+
 	/// <summary>The ID of the tenancy created during initialisation.</summary>
 	private Guid _tenancyId;
+
+	/// <summary>The Identity ID of the TenantUser created during initialisation.</summary>
+	private string _tenantUserId = null!;
 
 	/// <summary>
 	/// Initialises a new instance of <see cref="UsersControllerTestsBase"/> using
@@ -76,11 +82,23 @@ public abstract class UsersControllerTestsBase : IAsyncLifetime
 			};
 			await um.CreateAsync(tadmin, "Test1234!");
 
+			// TenantUser for the same tenancy — used in password-change tests.
+			var tuser = new ApplicationUser
+			{
+				UserName = "tuser",
+				Email = "tuser",
+				Role = "TenantUser",
+				TenancyId = tenancy.Id
+			};
+			await um.CreateAsync(tuser, "Test1234!");
+			_tenantUserId = tuser.Id;
+
 			await db.SaveChangesAsync();
 		});
 
 		_adminClient = Factory.CreateAuthenticatedClient("admin", "Test1234!");
 		_tenantAdminClient = Factory.CreateAuthenticatedClient("tadmin", "Test1234!");
+		_tenantUserClient = Factory.CreateAuthenticatedClient("tuser", "Test1234!");
 	}
 
 	/// <summary>Disposes the factory after all tests in the class have run.</summary>
@@ -153,7 +171,7 @@ public abstract class UsersControllerTestsBase : IAsyncLifetime
 		var createResp = await _adminClient.PostAsJsonAsync("/api/users", createReq);
 		var created = await createResp.Content.ReadFromJsonAsync<UserResponse>();
 
-		var updateReq = new UpdateUserRequest("update-user-renamed", "TenantAdmin", _tenancyId);
+		var updateReq = new UpdateUserRequest("update-user-renamed", "TenantAdmin", _tenancyId, null);
 		var updateResp = await _adminClient.PutAsJsonAsync($"/api/users/{created!.Id}", updateReq);
 
 		Assert.Equal(HttpStatusCode.OK, updateResp.StatusCode);
@@ -169,8 +187,77 @@ public abstract class UsersControllerTestsBase : IAsyncLifetime
 		var createResp = await _adminClient.PostAsJsonAsync("/api/users", createReq);
 		var created = await createResp.Content.ReadFromJsonAsync<UserResponse>();
 
-		var updateReq = new UpdateUserRequest("tenant-update-user2", "TenantAdmin", _tenancyId);
+		var updateReq = new UpdateUserRequest("tenant-update-user2", "TenantAdmin", _tenancyId, null);
 		var updateResp = await _tenantAdminClient.PutAsJsonAsync($"/api/users/{created!.Id}", updateReq);
+
+		Assert.Equal(HttpStatusCode.Forbidden, updateResp.StatusCode);
+	}
+
+	/// <summary>
+	/// Verifies that GlobalAdmin can supply a new password in PUT /api/users/{id}
+	/// and that the new password replaces the old one — the old password must stop
+	/// working and the new one must authenticate successfully.
+	/// </summary>
+	[Fact]
+	public async Task UpdateUser_WithNewPassword_AsGlobalAdmin_NewPasswordWorks()
+	{
+		// Create a fresh user so the test is self-contained.
+		var createReq = new CreateUserRequest("pw-test-ga", "OldPass1!", "TenantUser", _tenancyId);
+		var createResp = await _adminClient.PostAsJsonAsync("/api/users", createReq);
+		Assert.Equal(HttpStatusCode.Created, createResp.StatusCode);
+		var created = await createResp.Content.ReadFromJsonAsync<UserResponse>();
+
+		// Update with a new password alongside the other profile fields.
+		var updateReq = new UpdateUserRequest("pw-test-ga", "TenantUser", _tenancyId, "NewPass1!");
+		var updateResp = await _adminClient.PutAsJsonAsync($"/api/users/{created!.Id}", updateReq);
+		Assert.Equal(HttpStatusCode.OK, updateResp.StatusCode);
+
+		// The new password must authenticate successfully.
+		var newClient = Factory.CreateAuthenticatedClient("pw-test-ga", "NewPass1!");
+		var meResp = await newClient.GetAsync("/auth/me");
+		Assert.Equal(HttpStatusCode.OK, meResp.StatusCode);
+
+		// The old password must no longer work.
+		var oldClient = Factory.CreateAuthenticatedClient("pw-test-ga", "OldPass1!");
+		var oldMeResp = await oldClient.GetAsync("/auth/me");
+		Assert.Equal(HttpStatusCode.Unauthorized, oldMeResp.StatusCode);
+	}
+
+	/// <summary>
+	/// Verifies that a TenantUser can update their own password via PUT /api/users/{id}
+	/// and that the new password authenticates successfully afterwards.
+	/// </summary>
+	[Fact]
+	public async Task UpdateUser_WithNewPassword_AsTenantUser_CanChangeOwnPassword()
+	{
+		// _tenantUserId and _tenantUserClient are set up in InitializeAsync.
+		// The TenantUser may only update the password field; other fields are ignored.
+		var updateReq = new UpdateUserRequest("tuser", "TenantUser", _tenancyId, "ChangedPass1!");
+		var updateResp = await _tenantUserClient.PutAsJsonAsync($"/api/users/{_tenantUserId}", updateReq);
+		Assert.Equal(HttpStatusCode.OK, updateResp.StatusCode);
+
+		// New password must authenticate.
+		var newClient = Factory.CreateAuthenticatedClient("tuser", "ChangedPass1!");
+		var meResp = await newClient.GetAsync("/auth/me");
+		Assert.Equal(HttpStatusCode.OK, meResp.StatusCode);
+	}
+
+	/// <summary>
+	/// Verifies that a TenantUser receives 403 Forbidden when they attempt to
+	/// update another user's password via PUT /api/users/{id}.
+	/// </summary>
+	[Fact]
+	public async Task UpdateUser_WithNewPassword_AsTenantUser_CannotChangeOtherUsersPassword()
+	{
+		// Create a second TenantUser whose ID the first TenantUser will try to update.
+		var createReq = new CreateUserRequest("other-tuser", "Test1234!", "TenantUser", _tenancyId);
+		var createResp = await _adminClient.PostAsJsonAsync("/api/users", createReq);
+		Assert.Equal(HttpStatusCode.Created, createResp.StatusCode);
+		var otherUser = await createResp.Content.ReadFromJsonAsync<UserResponse>();
+
+		// _tenantUserClient is authenticated as "tuser" — attempting to update "other-tuser".
+		var updateReq = new UpdateUserRequest("other-tuser", "TenantUser", _tenancyId, "HackedPass1!");
+		var updateResp = await _tenantUserClient.PutAsJsonAsync($"/api/users/{otherUser!.Id}", updateReq);
 
 		Assert.Equal(HttpStatusCode.Forbidden, updateResp.StatusCode);
 	}

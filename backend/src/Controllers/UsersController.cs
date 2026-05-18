@@ -9,8 +9,8 @@ namespace IpamService.Controllers;
 /// Manages user accounts within the IPAM system. Access rules differ by role:
 /// <list type="bullet">
 ///   <item><term>GlobalAdmin</term><description>Can list and manage users across all tenancies and assign any role.</description></item>
-///   <item><term>TenantAdmin</term><description>Can list and manage users within their own tenancy; can only create <c>TenantUser</c> accounts.</description></item>
-///   <item><term>TenantUser</term><description>Cannot list or create users; can only change their own password via <c>PUT /api/users/{id}/password</c>.</description></item>
+///   <item><term>TenantAdmin</term><description>Can list and manage users within their own tenancy; can only create and update <c>TenantUser</c> accounts.</description></item>
+///   <item><term>TenantUser</term><description>Cannot list or create users; can only update their own password via <c>PUT /api/users/{id}</c>.</description></item>
 /// </list>
 ///
 /// All business logic and role-based permission checks are delegated to
@@ -66,16 +66,20 @@ public class UsersController : IpamControllerBase
 		});
 
 	/// <summary>
-	/// Updates mutable profile fields for an existing user. Password changes are
-	/// handled by dedicated password endpoints.
+	/// Updates a user's profile fields (username, role, tenancyId) and, when a
+	/// <c>password</c> is included in the request body, changes their password in
+	/// the same call.
+	///
+	/// TenantUser callers may only supply a new password and only for their own ID —
+	/// all other fields are ignored for TenantUser callers.
 	/// </summary>
 	/// <param name="id">The Identity user ID to update.</param>
-	/// <param name="req">Request body with updated username, role, and tenancy.</param>
+	/// <param name="req">Request body with updated profile fields and an optional new password.</param>
 	/// <returns>
 	/// <c>200 OK</c> with updated user details on success;
 	/// <c>404 Not Found</c> if the user does not exist;
 	/// <c>403 Forbidden</c> if the caller lacks permission for the requested change;
-	/// <c>400 Bad Request</c> if Identity rejects the username update.
+	/// <c>400 Bad Request</c> if Identity rejects the username update or password.
 	/// </returns>
 	[HttpPut("{id}")]
 	public Task<IActionResult> Update(string id, [FromBody] UpdateUserRequest req) =>
@@ -96,27 +100,6 @@ public class UsersController : IpamControllerBase
 		ExecuteAsync(async () =>
 		{
 			await _users.DeleteAsync(id, GetCaller());
-			return NoContent();
-		});
-
-	/// <summary>
-	/// Changes the password of any user. GlobalAdmin can target any user;
-	/// TenantAdmin can target users within their tenancy; TenantUser can only
-	/// change their own password by passing their own ID.
-	/// </summary>
-	/// <param name="id">The Identity user ID of the target user.</param>
-	/// <param name="req">Request body containing the new password.</param>
-	/// <returns>
-	/// <c>204 No Content</c> on success;
-	/// <c>404 Not Found</c> if the user does not exist;
-	/// <c>403 Forbidden</c> if the caller lacks permission;
-	/// <c>400 Bad Request</c> if the new password fails Identity validation.
-	/// </returns>
-	[HttpPut("{id}/password")]
-	public Task<IActionResult> ChangePassword(string id, [FromBody] ChangePasswordRequest req) =>
-		ExecuteAsync(async () =>
-		{
-			await _users.ChangePasswordAsync(id, req.NewPassword, GetCaller());
 			return NoContent();
 		});
 }

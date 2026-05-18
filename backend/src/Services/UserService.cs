@@ -7,16 +7,16 @@ using Microsoft.EntityFrameworkCore;
 namespace IpamService.Services;
 
 /// <summary>
-/// Manages user account operations: listing, creation, update, deletion, and
-/// password management. Role-based authorization rules are enforced here so
-/// that permission logic is co-located with the data access it governs rather
-/// than scattered across controller action methods.
+/// Manages user account operations: listing, creation, update, and deletion.
+/// Role-based authorization rules are enforced here so that permission logic is
+/// co-located with the data access it governs rather than scattered across
+/// controller action methods.
 ///
 /// Authorization summary:
 /// <list type="bullet">
 ///   <item><term>GlobalAdmin</term><description>Unrestricted access to all user operations across all tenancies.</description></item>
 ///   <item><term>TenantAdmin</term><description>Can only list and manage <c>TenantUser</c> accounts within their own tenancy.</description></item>
-///   <item><term>TenantUser</term><description>No user management rights; can only change their own password via <c>PUT /api/users/{id}/password</c>.</description></item>
+///   <item><term>TenantUser</term><description>Can only update their own account, and only the password field.</description></item>
 /// </list>
 ///
 /// Registered as a scoped service.
@@ -130,16 +130,23 @@ public class UserService
 	}
 
 	/// <summary>
-	/// Updates mutable profile fields for an existing user. Password changes are
-	/// handled by dedicated endpoints and are not processed here.
+	/// Updates a user's profile fields and, when <see cref="UpdateUserRequest.Password"/>
+	/// is supplied, changes their password in the same operation.
+	///
+	/// Permission rules:
+	/// <list type="bullet">
+	///   <item><term>GlobalAdmin</term><description>No restrictions — can update any user's profile and password.</description></item>
+	///   <item><term>TenantAdmin</term><description>Can only update TenantUser accounts within their own tenancy. Cannot escalate roles.</description></item>
+	///   <item><term>TenantUser</term><description>Can only call this endpoint for their own user ID, and only to change their password. All profile fields are ignored.</description></item>
+	/// </list>
 	/// </summary>
 	/// <param name="id">Identity ID of the user to update.</param>
-	/// <param name="req">Request body containing the new username, role, and tenancy.</param>
+	/// <param name="req">Request body containing the new profile values and an optional new password.</param>
 	/// <param name="caller">The context of the authenticated caller.</param>
 	/// <returns>The updated user as a <see cref="UserResponse"/>.</returns>
 	/// <exception cref="NotFoundException">Thrown if the user does not exist.</exception>
 	/// <exception cref="ForbiddenException">Thrown if the caller lacks permission for the requested change.</exception>
-	/// <exception cref="IdentityOperationException">Thrown if Identity rejects the username update.</exception>
+	/// <exception cref="IdentityOperationException">Thrown if Identity rejects the username update or the new password.</exception>
 	public async Task<UserResponse> UpdateAsync(string id, UpdateUserRequest req, CallerContext caller)
 	{
 		var user = await _userManager.FindByIdAsync(id)
@@ -158,12 +165,25 @@ public class UserService
 		}
 		else if (caller.IsTenantUser)
 		{
-			// TenantUser cannot update any account.
-			throw new ForbiddenException();
+			// TenantUser can only update their own password — no profile field changes.
+			if (user.Id != caller.UserId)
+			{
+				throw new ForbiddenException();
+			}
+
+			// If the caller is TenantUser and no password is provided, there is
+			// nothing to do — they cannot change any other field.
+			if (req.Password is null)
+			{
+				return new UserResponse(user.Id, user.UserName!, user.Role, user.TenancyId);
+			}
+
+			// Apply password change only — skip the profile update block below.
+			await ApplyPasswordChangeAsync(user, req.Password);
+			return new UserResponse(user.Id, user.UserName!, user.Role, user.TenancyId);
 		}
 
-		// GlobalAdmin: no restrictions.
-
+		// GlobalAdmin / TenantAdmin path: update profile fields.
 		user.UserName = req.Username;
 		user.Email = req.Username;
 		user.Role = req.Role;
@@ -173,6 +193,12 @@ public class UserService
 		if (!result.Succeeded)
 		{
 			throw new IdentityOperationException(result.Errors.Select(e => e.Description));
+		}
+
+		// If a new password was also supplied, apply it after the profile update.
+		if (req.Password is not null)
+		{
+			await ApplyPasswordChangeAsync(user, req.Password);
 		}
 
 		return new UserResponse(user.Id, user.UserName!, user.Role, user.TenancyId);
@@ -213,42 +239,22 @@ public class UserService
 		await _userManager.DeleteAsync(user);
 	}
 
+	// ── Helpers ───────────────────────────────────────────────────────────────
+
 	/// <summary>
-	/// Changes the password for any user. GlobalAdmin can reset any user's password;
-	/// TenantAdmin can reset passwords within their tenancy; TenantUser can only
-	/// reset their own password.
+	/// Replaces a user's password by removing the existing one and adding the new
+	/// one. This bypass-approach is intentional — the caller has already been
+	/// authenticated by the request pipeline, so the old password is not required.
 	/// </summary>
-	/// <param name="id">Identity ID of the target user.</param>
-	/// <param name="newPassword">The new password to set.</param>
-	/// <param name="caller">The context of the authenticated caller.</param>
-	/// <exception cref="NotFoundException">Thrown if the user does not exist.</exception>
-	/// <exception cref="ForbiddenException">Thrown if the caller lacks permission to reset this user's password.</exception>
+	/// <param name="user">The user whose password to change.</param>
+	/// <param name="newPassword">The new password string. Must pass the configured policy.</param>
 	/// <exception cref="IdentityOperationException">Thrown if the new password violates the configured policy.</exception>
-	public async Task ChangePasswordAsync(string id, string newPassword, CallerContext caller)
+	private async Task ApplyPasswordChangeAsync(ApplicationUser user, string newPassword)
 	{
-		var user = await _userManager.FindByIdAsync(id)
-			?? throw new NotFoundException();
-
-		if (caller.IsTenantAdmin)
-		{
-			// TenantAdmin can only reset passwords for users in their own tenancy.
-			if (user.TenancyId != caller.TenancyId)
-			{
-				throw new ForbiddenException();
-			}
-		}
-		else if (caller.IsTenantUser)
-		{
-			// TenantUser can only reset their own password.
-			if (user.Id != caller.UserId)
-			{
-				throw new ForbiddenException();
-			}
-		}
-
-		// Remove the existing password then add the new one.
-		// This approach bypasses the old-password requirement because the caller
-		// has already authenticated via Basic Auth on this request.
+		// Remove the existing password hash then add the new one.
+		// Using Remove+Add instead of ResetPasswordAsync avoids requiring a
+		// password-reset token, which is appropriate here because authorization
+		// has already been verified at the service boundary.
 		await _userManager.RemovePasswordAsync(user);
 		var result = await _userManager.AddPasswordAsync(user, newPassword);
 		if (!result.Succeeded)
@@ -256,5 +262,4 @@ public class UserService
 			throw new IdentityOperationException(result.Errors.Select(e => e.Description));
 		}
 	}
-
 }

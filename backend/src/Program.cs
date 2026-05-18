@@ -70,7 +70,7 @@ switch (provider)
 // user validators, and all the UserManager/SignInManager infrastructure.
 // IMPORTANT: AddIdentity also sets DefaultAuthenticateScheme to the cookie
 // scheme (IdentityConstants.ApplicationScheme). We override that below in
-// AddAuthentication so that Basic auth governs every request instead.
+// AddAuthentication so that our custom scheme governs every request instead.
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
 	// Enforce a sensible minimum password policy — at least 8 characters
@@ -85,18 +85,88 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 .AddDefaultTokenProviders();
 
 // ── Authentication ────────────────────────────────────────────────────────────
-// Because AddIdentity overrides the default schemes to cookies we must
-// explicitly set all three relevant defaults to our "Basic" scheme using
-// the lambda overload. Passing "Basic" as the single string argument to
-// AddAuthentication() only sets DefaultScheme (a fallback), which AddIdentity
-// then overrides — that approach produces 401 on every authenticated request.
+// The API supports two auth schemes that coexist without interfering:
+//
+//   "Basic"    — stateless per-request credential validation. Used by all
+//                direct API consumers (scripts, tools, other services). The
+//                Authorization: Basic header is checked on every request.
+//
+//   "Cookie"   — encrypted ASP.NET Core cookie issued by POST /auth/login.
+//                Used by the React SPA so the browser handles credentials
+//                automatically after a login form submission.
+//
+//   "Combined" — a PolicyScheme that routes to "Basic" when an Authorization
+//                header is present, and to "Cookie" otherwise. This is set as
+//                the default authenticate scheme so all [Authorize] endpoints
+//                accept either mechanism transparently.
+//
+// The DefaultChallengeScheme remains "Basic" so that unauthenticated API
+// requests receive the standard WWW-Authenticate: Basic response header,
+// which is the correct challenge for API consumers.
+//
+// NOTE: ASP.NET Core Data Protection keys used to encrypt/decrypt the cookie
+// are ephemeral (in-memory) by default. For production deployments with
+// multiple instances or container restarts, persist the keys via
+// AddDataProtection().PersistKeysToFileSystem() or a cloud key store so that
+// existing cookies remain valid across restarts.
 builder.Services.AddAuthentication(options =>
 {
-	options.DefaultAuthenticateScheme = "Basic";
-	options.DefaultChallengeScheme = "Basic";
-	options.DefaultForbidScheme = "Basic";
+	// Route all unannotated [Authorize] checks through the Combined policy scheme.
+	options.DefaultAuthenticateScheme = AuthConstants.Schemes.Combined;
+	// Unauthenticated challenges should still advertise Basic auth so that
+	// API clients (curl, Postman, etc.) know what to send.
+	options.DefaultChallengeScheme = AuthConstants.Schemes.Basic;
+	options.DefaultForbidScheme = AuthConstants.Schemes.Basic;
 })
-.AddScheme<AuthenticationSchemeOptions, BasicAuthHandler>("Basic", null);
+.AddScheme<AuthenticationSchemeOptions, BasicAuthHandler>(AuthConstants.Schemes.Basic, null)
+.AddCookie(AuthConstants.Schemes.Cookie, options =>
+{
+	// Cookie name surfaced in the browser — no functional impact but makes
+	// it easy to identify in browser dev tools.
+	options.Cookie.Name = AuthConstants.Cookies.AuthCookieName;
+
+	// HttpOnly prevents JavaScript from reading the cookie value, mitigating
+	// XSS-based session theft.
+	options.Cookie.HttpOnly = true;
+
+	// SameSite=Strict prevents the cookie from being sent on cross-site requests,
+	// providing CSRF protection without requiring a separate CSRF token.
+	options.Cookie.SameSite = SameSiteMode.Strict;
+
+	// SameAsRequest allows the cookie over HTTP in development (Vite dev server)
+	// while automatically requiring HTTPS when the app is served over HTTPS.
+	options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+
+	// Session cookie — expires when the browser session ends rather than
+	// persisting across browser restarts. Set ExpireTimeSpan to make it
+	// a sliding persistent cookie if longer sessions are required.
+	options.Cookie.MaxAge = TimeSpan.FromHours(24);
+	options.SlidingExpiration = true;
+
+	// Suppress the default MVC redirects — this is an API, not an MVC app.
+	// Return HTTP status codes directly instead of redirecting to /Account/Login.
+	options.Events.OnRedirectToLogin = ctx =>
+	{
+		ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+		return Task.CompletedTask;
+	};
+	options.Events.OnRedirectToAccessDenied = ctx =>
+	{
+		ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+		return Task.CompletedTask;
+	};
+})
+.AddPolicyScheme(AuthConstants.Schemes.Combined, "Basic or Cookie", options =>
+{
+	// Route to Basic auth when an Authorization header is present (API clients),
+	// and to the Cookie scheme otherwise (browser-based UI requests).
+	// This means a request with both a cookie AND an Authorization header will
+	// always use Basic auth, which is the correct behaviour for hybrid clients.
+	options.ForwardDefaultSelector = ctx =>
+		ctx.Request.Headers.ContainsKey("Authorization")
+			? AuthConstants.Schemes.Basic
+			: AuthConstants.Schemes.Cookie;
+});
 
 // ── Authorization ─────────────────────────────────────────────────────────────
 // Enables [Authorize] and [Authorize(Roles = "...")] on controllers.
@@ -117,6 +187,14 @@ builder.Services.AddScoped<SubnetService>();
 builder.Services.AddScoped<ExclusionService>();
 builder.Services.AddScoped<TagService>();
 builder.Services.AddScoped<StatsService>();
+// Dashboard service — aggregates data across multiple resources for the UI:
+builder.Services.AddScoped<DashboardService>();
+
+// ── Configuration bindings ────────────────────────────────────────────────────
+// Bind typed options classes so services can receive config via IOptions<T>.
+builder.Services.Configure<SeedOptions>(config.GetSection("Seed"));
+builder.Services.Configure<DashboardOptions>(config.GetSection("Dashboard"));
+builder.Services.Configure<UiOptions>(config.GetSection("Ui"));
 
 // ── Web API infrastructure ────────────────────────────────────────────────────
 builder.Services.AddControllers();
@@ -127,10 +205,6 @@ builder.Services.AddProblemDetails();
 
 // OpenAPI document generation — used by Scalar in Development only.
 builder.Services.AddOpenApi();
-
-// Bind the Seed section so it could be injected via IOptions<SeedOptions>
-// in other services if needed in the future.
-builder.Services.Configure<SeedOptions>(config.GetSection("Seed"));
 
 // ── Build the application ─────────────────────────────────────────────────────
 var app = builder.Build();
@@ -213,6 +287,28 @@ app.MapGet("/health", async (AppDbContext db) =>
 	}
 });
 
+// ── React SPA static file serving ────────────────────────────────────────────
+// When Ui:Enabled is true (the default), serve the built React app from
+// wwwroot/ and fall back to index.html for all non-API, non-file requests so
+// that client-side routing works correctly.
+//
+// When Ui:Enabled is false, these registrations are skipped and the server
+// operates in API-only mode — useful in environments where the SPA is hosted
+// on a CDN or a separate static file server.
+var uiEnabled = config.GetSection("Ui").GetValue<bool?>("Enabled") ?? true;
+if (uiEnabled)
+{
+	// Serve files from wwwroot/ (default static file root). The Vite build
+	// output should be copied here by the Dockerfile or CI pipeline.
+	app.UseStaticFiles();
+
+	// For any request that does not match an API route or a static file,
+	// serve index.html so the React router handles the URL client-side.
+	// The /api and /auth and /dashboard prefixes are excluded implicitly
+	// because MapControllers() registers those routes before this fallback.
+	app.MapFallbackToFile("index.html");
+}
+
 // ── Startup migration and seed ────────────────────────────────────────────────
 // Run pending EF Core migrations synchronously before accepting traffic.
 // This ensures the schema is always up to date when the service starts,
@@ -227,7 +323,7 @@ using (var scope = app.Services.CreateScope())
 
 	// Seed the GlobalAdmin user from configuration if it does not already exist.
 	// After the first run the seed values are no longer read; changing them will
-	// NOT update an existing admin's password — use PUT /api/auth/password for that.
+	// NOT update an existing admin's password — use PUT /api/users/{id} for that.
 	var userManager = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
 	var seedOptions = config.GetSection("Seed");
 	var adminUsername = seedOptions["AdminUsername"]!;
