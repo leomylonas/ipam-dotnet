@@ -100,9 +100,14 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 //                the default authenticate scheme so all [Authorize] endpoints
 //                accept either mechanism transparently.
 //
-// The DefaultChallengeScheme remains "Basic" so that unauthenticated API
-// requests receive the standard WWW-Authenticate: Basic response header,
-// which is the correct challenge for API consumers.
+// DefaultChallengeScheme and DefaultForbidScheme are both set to "Combined"
+// so that challenge routing uses the same ForwardDefaultSelector as
+// authentication. This means:
+//   - Requests with an Authorization header → Basic challenge (WWW-Authenticate
+//     header sent; correct for API clients such as curl and Postman).
+//   - Requests without an Authorization header → Cookie challenge (plain 401,
+//     no WWW-Authenticate header; prevents the browser from showing its
+//     native Basic-auth dialog when the SPA's startup /auth/me check fails).
 //
 // NOTE: ASP.NET Core Data Protection keys used to encrypt/decrypt the cookie
 // are ephemeral (in-memory) by default. For production deployments with
@@ -111,12 +116,11 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 // existing cookies remain valid across restarts.
 builder.Services.AddAuthentication(options =>
 {
-	// Route all unannotated [Authorize] checks through the Combined policy scheme.
+	// Route all authentication, challenge, and forbid checks through the
+	// Combined policy scheme so the Basic/Cookie split is applied uniformly.
 	options.DefaultAuthenticateScheme = AuthConstants.Schemes.Combined;
-	// Unauthenticated challenges should still advertise Basic auth so that
-	// API clients (curl, Postman, etc.) know what to send.
-	options.DefaultChallengeScheme = AuthConstants.Schemes.Basic;
-	options.DefaultForbidScheme = AuthConstants.Schemes.Basic;
+	options.DefaultChallengeScheme = AuthConstants.Schemes.Combined;
+	options.DefaultForbidScheme = AuthConstants.Schemes.Combined;
 })
 .AddScheme<AuthenticationSchemeOptions, BasicAuthHandler>(AuthConstants.Schemes.Basic, null)
 .AddCookie(AuthConstants.Schemes.Cookie, options =>
@@ -339,7 +343,14 @@ using (var scope = app.Services.CreateScope())
 			Role = Roles.GlobalAdmin,
 			TenancyId = null
 		};
-		await userManager.CreateAsync(admin, adminPassword);
+		var createResult = await userManager.CreateAsync(admin, adminPassword);
+		if (!createResult.Succeeded)
+		{
+			// Fail fast so a misconfigured seed password surfaces immediately
+			// rather than leaving the application in a state with no admin user.
+			var errors = string.Join(", ", createResult.Errors.Select(e => e.Description));
+			throw new InvalidOperationException($"Failed to seed GlobalAdmin user: {errors}");
+		}
 	}
 }
 

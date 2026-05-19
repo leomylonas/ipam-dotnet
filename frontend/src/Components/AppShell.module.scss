@@ -1,0 +1,11 @@
+// Carbon's header is 3rem tall. The content area must fill the remaining
+// viewport height so the page background never shows through in dark mode.
+.content {
+	min-block-size: calc(100vh - 3rem);
+}
+
+// Give the side nav a slightly elevated layer so it reads as distinct from the
+// main content background in both light and dark themes.
+:global(.cds--side-nav) {
+	background-color: var(--cds-layer-01);
+}

@@ -8,7 +8,7 @@
 			"name": "C#: IpamService Debug",
 			"type": "dotnet",
 			"request": "launch",
-			"projectPath": "${workspaceFolder}/src/IpamService.csproj"
+			"projectPath": "${workspaceFolder}/backend/src/IpamService.csproj"
 		}
 	]
 }

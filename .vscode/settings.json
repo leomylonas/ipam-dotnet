@@ -1,0 +1,28 @@
+{
+	"editor.formatOnSave": true,
+	"editor.codeActionsOnSave": {
+		"source.fixAll": "always"
+	},
+
+	// ── TypeScript ────────────────────────────────────────────────────────────
+	// Use the workspace TypeScript install (v6) rather than VS Code's bundled
+	// version. This is the regular tsc SDK; @typescript/native-preview (tsgo)
+	// is CLI-only and does not yet ship a language-server binary.
+	"js/ts.tsdk.path": "frontend/node_modules/typescript/lib",
+
+	// ── ESLint ────────────────────────────────────────────────────────────────
+	"eslint.enable": true,
+	// Run ESLint from the frontend directory so it resolves eslint.config.ts,
+	// node_modules, and the tsconfig relative to the correct root.
+	"eslint.workingDirectories": [
+		{ "directory": "frontend", "changeProcessCWD": true }
+	],
+
+	// ── Formatters ────────────────────────────────────────────────────────────
+	"[typescriptreact]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode"
+	},
+	"[typescript]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode"
+	}
+}

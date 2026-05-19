@@ -1,0 +1,23 @@
+// Pushes the toggle button to the bottom of the flex-column SideNav.
+.footer {
+	margin-block-start: auto;
+}
+
+// Matches the visual style of a SideNavLink so the toggle blends in.
+.toggle {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	width: 100%;
+	padding-inline: 1rem;
+	block-size: 3rem;
+	border: none;
+	background: none;
+	color: var(--cds-text-secondary);
+	cursor: pointer;
+
+	&:hover {
+		background-color: var(--cds-layer-hover-01);
+		color: var(--cds-text-primary);
+	}
+}

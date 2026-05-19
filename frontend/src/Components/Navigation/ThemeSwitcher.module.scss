@@ -1,0 +1,32 @@
+// Popover renders as a <span> (inline). Make it a full-height flex item so
+// the HeaderGlobalAction inside stretches to fill the header bar.
+.popover {
+	block-size: 100%;
+}
+
+// Bare list reset for the theme options inside PopoverContent.
+.menu {
+	padding: 0;
+	margin: 0;
+	list-style: none;
+	min-inline-size: 8rem;
+}
+
+// Each option matches the visual style of OverflowMenuItem.
+.menuItem {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	inline-size: 100%;
+	padding: 0.875rem 1rem;
+	border: none;
+	background: none;
+	color: var(--cds-text-primary);
+	cursor: pointer;
+	white-space: nowrap;
+
+	&:hover {
+		background-color: var(--cds-layer-hover-01);
+	}
+}

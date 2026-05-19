@@ -1,0 +1,21 @@
+@use '@carbon/react/scss/type' as type;
+
+// Full-viewport centering wrapper for the unauthenticated login page.
+.page {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	min-height: 100vh;
+	padding: 1rem;
+}
+
+// Constrains the login card to a readable width.
+.card {
+	width: 100%;
+	max-width: 400px;
+}
+
+.subtitle {
+	@include type.type-style('body-compact-01');
+	color: var(--cds-text-secondary);
+}

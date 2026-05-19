@@ -1,0 +1,67 @@
+// Global utility classes. Apply directly in JSX as plain className strings
+// (e.g. className="w100") — no CSS module import needed.
+
+.w100 {
+	width: 100%;
+	max-inline-size: 100%;
+}
+
+// Text colour utilities — adapts automatically when the Carbon theme changes.
+.text-primary {
+	color: var(--cds-text-primary);
+}
+
+.text-secondary {
+	color: var(--cds-text-secondary);
+}
+
+.text-placeholder {
+	color: var(--cds-text-placeholder);
+}
+
+.text-helper {
+	color: var(--cds-text-helper);
+}
+
+.text-error {
+	color: var(--cds-text-error);
+}
+
+.text-inverse {
+	color: var(--cds-text-inverse);
+}
+
+.text-disabled {
+	color: var(--cds-text-disabled);
+}
+
+.text-on-color {
+	color: var(--cds-text-on-color);
+}
+
+// Grid self-alignment utilities.
+.justify-self-start {
+	justify-self: start;
+}
+
+.justify-self-center {
+	justify-self: center;
+}
+
+.justify-self-end {
+	justify-self: end;
+}
+
+// Text alignment utilities.
+
+.align-left {
+	text-align: left;
+}
+
+.align-center {
+	text-align: center;
+}
+
+.align-right {
+	text-align: right;
+}

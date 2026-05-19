@@ -1,0 +1,7 @@
+// Applied to a Carbon Stack (flex column) to centre its content vertically
+// and horizontally within most of the viewport height.
+.page {
+	align-items: center;
+	justify-content: center;
+	min-height: 60vh;
+}
