@@ -1,6 +1,8 @@
 # IPAM Service
 
 [![CI](https://github.com/leomylonas/dotnet-ipam/actions/workflows/ci.yml/badge.svg)](https://github.com/leomylonas/dotnet-ipam/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/leomylonas/dotnet-ipam)](https://github.com/leomylonas/dotnet-ipam/releases/latest)
+[![Docker](https://img.shields.io/badge/ghcr.io-dotnet--ipam-blue?logo=docker)](https://github.com/leomylonas/dotnet-ipam/pkgs/container/dotnet-ipam)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A multi-tenant IP Address Management (IPAM) system with a .NET 10 REST API backend and a React SPA frontend.
@@ -58,37 +60,37 @@ It supports:
 
 ### Backend
 
-| Concern | Technology |
-|---|---|
-| Framework | .NET 10 / ASP.NET Core Web API |
-| Data access | Entity Framework Core 10 |
-| Identity | ASP.NET Identity |
-| Authentication | HTTP Basic Auth + cookie auth (combined policy scheme) |
-| API docs | OpenAPI + Scalar (`/scalar` in Development only) |
-| Logging | Serilog (async console sink) |
+| Concern            | Technology                                                                      |
+| ------------------ | ------------------------------------------------------------------------------- |
+| Framework          | .NET 10 / ASP.NET Core Web API                                                  |
+| Data access        | Entity Framework Core 10                                                        |
+| Identity           | ASP.NET Identity                                                                |
+| Authentication     | HTTP Basic Auth + cookie auth (combined policy scheme)                          |
+| API docs           | OpenAPI + Scalar (`/scalar` in Development only)                                |
+| Logging            | Serilog (async console sink)                                                    |
 | Database providers | SQLite, MySQL/MariaDB (Oracle `MySql.EntityFrameworkCore`), PostgreSQL (Npgsql) |
-| Tests | xUnit — Unit + Integration + System via `WebApplicationFactory<Program>` |
+| Tests              | xUnit — Unit + Integration + System via `WebApplicationFactory<Program>`        |
 
 ### Frontend
 
-| Concern | Technology |
-|---|---|
-| Framework | React 18 + TypeScript + Vite |
-| UI library | Carbon Design System (`@carbon/react` v1) |
-| Routing | TanStack React Router v1 |
-| Data fetching | TanStack React Query v5 |
-| Forms | React Hook Form v7 + Zod v4 |
-| HTTP client | `@leomylonas/json-fetch-client` |
-| Package manager | pnpm |
-| Tests | Vitest (unit), Playwright (E2E) |
+| Concern         | Technology                                |
+| --------------- | ----------------------------------------- |
+| Framework       | React 18 + TypeScript + Vite              |
+| UI library      | Carbon Design System (`@carbon/react` v1) |
+| Routing         | TanStack React Router v1                  |
+| Data fetching   | TanStack React Query v5                   |
+| Forms           | React Hook Form v7 + Zod v4               |
+| HTTP client     | `@leomylonas/json-fetch-client`           |
+| Package manager | pnpm                                      |
+| Tests           | Vitest (unit), Playwright (E2E)           |
 
 ## Role and Access Model
 
-| Role | Scope |
-|---|---|
-| `GlobalAdmin` | Full system access, no tenancy affiliation |
+| Role          | Scope                                                                          |
+| ------------- | ------------------------------------------------------------------------------ |
+| `GlobalAdmin` | Full system access, no tenancy affiliation                                     |
 | `TenantAdmin` | Manage users/subnets/exclusions/audit within own tenancy; allocate/release IPs |
-| `TenantUser` | Allocate/release within accessible subnets; manage own allocation tags |
+| `TenantUser`  | Allocate/release within accessible subnets; manage own allocation tags         |
 
 ## Configuration
 
@@ -96,24 +98,24 @@ Configuration is file-driven via `appsettings*.json`.
 
 ### Runtime Options
 
-| Key | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `Database:Provider` | `string` | Yes | — | `sqlite`, `mysql`, or `postgres` |
-| `Database:ConnectionString` | `string` | Yes | — | Provider-specific connection string |
-| `Seed:AdminUsername` | `string` | Yes | — | GlobalAdmin username bootstrapped on first startup |
-| `Seed:AdminPassword` | `string` | Yes | — | GlobalAdmin bootstrap password (must satisfy Identity policy) |
-| `Dashboard:ExhaustionThresholdPercent` | `double` | No | `80.0` | Utilisation % at or above which a subnet appears in exhaustion alerts |
-| `Ui:Enabled` | `bool` | No | `true` | When `true`, serves the React SPA from `wwwroot/`; when `false`, API-only mode |
-| `Serilog:MinimumLevel:Default` | `string` | No | `Information` | Default minimum log level |
+| Key                                    | Type     | Required | Default       | Description                                                                    |
+| -------------------------------------- | -------- | -------- | ------------- | ------------------------------------------------------------------------------ |
+| `Database:Provider`                    | `string` | Yes      | —             | `sqlite`, `mysql`, or `postgres`                                               |
+| `Database:ConnectionString`            | `string` | Yes      | —             | Provider-specific connection string                                            |
+| `Seed:AdminUsername`                   | `string` | Yes      | —             | GlobalAdmin username bootstrapped on first startup                             |
+| `Seed:AdminPassword`                   | `string` | Yes      | —             | GlobalAdmin bootstrap password (must satisfy Identity policy)                  |
+| `Dashboard:ExhaustionThresholdPercent` | `double` | No       | `80.0`        | Utilisation % at or above which a subnet appears in exhaustion alerts          |
+| `Ui:Enabled`                           | `bool`   | No       | `true`        | When `true`, serves the React SPA from `wwwroot/`; when `false`, API-only mode |
+| `Serilog:MinimumLevel:Default`         | `string` | No       | `Information` | Default minimum log level                                                      |
 
 ### Identity Password Policy
 
-| Option | Value |
-|---|---|
-| Minimum length | `8` |
-| Requires digit | `true` |
-| Requires uppercase | `true` |
-| Requires lowercase | `true` |
+| Option                    | Value   |
+| ------------------------- | ------- |
+| Minimum length            | `8`     |
+| Requires digit            | `true`  |
+| Requires uppercase        | `true`  |
+| Requires lowercase        | `true`  |
 | Requires non-alphanumeric | `false` |
 
 ## Logging
@@ -163,14 +165,14 @@ Edit `backend/src/appsettings.json`:
 
 ```json
 {
-  "Database": {
-    "Provider": "sqlite",
-    "ConnectionString": "Data Source=ipam.db"
-  },
-  "Seed": {
-    "AdminUsername": "admin",
-    "AdminPassword": "Admin1234!"
-  }
+    "Database": {
+        "Provider": "sqlite",
+        "ConnectionString": "Data Source=ipam.db"
+    },
+    "Seed": {
+        "AdminUsername": "admin",
+        "AdminPassword": "Admin1234!"
+    }
 }
 ```
 
@@ -309,12 +311,11 @@ The Dockerfile is multi-stage: Node builds the React SPA, then .NET restores, bu
 docker pull ghcr.io/leomylonas/dotnet-ipam:latest
 ```
 
-| Tag | Description |
-|---|---|
+| Tag      | Description                |
+| -------- | -------------------------- |
 | `latest` | Most recent stable release |
-| `v1.2.3` | Specific release version |
+| `v1.2.3` | Specific release version   |
 
 ## Licence
 
 MIT — see [LICENSE](LICENSE) for details.
-
