@@ -1,5 +1,8 @@
 # IPAM Service
 
+[![CI](https://github.com/leomylonas/dotnet-ipam/actions/workflows/ci.yml/badge.svg)](https://github.com/leomylonas/dotnet-ipam/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A multi-tenant IP Address Management (IPAM) system with a .NET 10 REST API backend and a React SPA frontend.
 
 It supports multiple isolated tenancies, each with their own private subnets and users, alongside globally shared subnets managed by a GlobalAdmin. The backend supports stateless HTTP Basic Auth for API consumers and cookie-based auth for the React UI.
@@ -16,6 +19,7 @@ It supports multiple isolated tenancies, each with their own private subnets and
 - [Running Tests](#running-tests)
 - [Migrations](#migrations)
 - [Docker](#docker)
+- [Licence](#licence)
 
 ## What This Project Does
 
@@ -309,4 +313,8 @@ docker pull ghcr.io/leomylonas/dotnet-ipam:latest
 |---|---|
 | `latest` | Most recent stable release |
 | `v1.2.3` | Specific release version |
+
+## Licence
+
+MIT — see [LICENSE](LICENSE) for details.
 
