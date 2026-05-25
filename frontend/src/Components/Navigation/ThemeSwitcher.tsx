@@ -35,7 +35,7 @@ export function ThemeSwitcher() {
 	const CurrentIcon = themeOptions.find((o) => o.mode === mode)?.Icon ?? Screen;
 
 	return (
-		<Popover ref={popoverRef} className={styles.popover} open={open} align="bottom-right" dropShadow>
+		<Popover ref={popoverRef} className={styles.popover} open={open} align="bottom-end" dropShadow>
 			<HeaderGlobalAction
 				aria-label="Theme"
 				data-testid="theme-toggle"

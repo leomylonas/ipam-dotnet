@@ -1,0 +1,6 @@
+.vertical {
+	:global(.cds--inline-notification__text-wrapper) {
+		flex-direction: column;
+		flex-wrap: nowrap;
+	}
+}

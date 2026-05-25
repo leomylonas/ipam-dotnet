@@ -46,7 +46,6 @@ public record CheckIpResponse(
 /// <param name="Id">The allocation's unique identifier.</param>
 /// <param name="IpAddress">The allocated IP address as a dotted-decimal string.</param>
 /// <param name="UserId">Identity ID of the user who requested the allocation.</param>
-/// <param name="TenancyId">Tenancy on whose behalf this IP was allocated.</param>
 /// <param name="SubnetId">Subnet the IP was drawn from.</param>
 /// <param name="Description">Description provided at allocation time.</param>
 /// <param name="AllocatedAt">UTC timestamp when the allocation was made.</param>
@@ -55,7 +54,6 @@ public record AllocationResponse(
 	Guid Id,
 	string IpAddress,
 	string UserId,
-	Guid TenancyId,
 	Guid SubnetId,
 	string Description,
 	DateTime AllocatedAt,

@@ -45,14 +45,18 @@ public record GlobalExhaustionAlert(
 /// <param name="Id">The audit entry's unique identifier.</param>
 /// <param name="Timestamp">UTC timestamp of the action.</param>
 /// <param name="Action">Short action verb, e.g. Allocated, SubnetCreated.</param>
+/// <param name="UserId">Raw user ID of the performing user — enables the UI to copy it.</param>
 /// <param name="PerformedBy">Username of the user who performed the action.</param>
+/// <param name="TenancyId">Raw tenancy ID, or null for GlobalAdmin actions.</param>
 /// <param name="TenancyName">Name of the tenancy context, or null for GlobalAdmin actions.</param>
 /// <param name="Detail">Optional extra context from the audit entry's Notes field.</param>
 public record GlobalDashboardAuditEntry(
 	Guid Id,
 	DateTime Timestamp,
 	string Action,
+	string UserId,
 	string PerformedBy,
+	Guid? TenancyId,
 	string? TenancyName,
 	string? Detail
 );
@@ -98,12 +102,14 @@ public record TenantExhaustionAlert(
 /// <param name="Id">The audit entry's unique identifier.</param>
 /// <param name="Timestamp">UTC timestamp of the action.</param>
 /// <param name="Action">Short action verb.</param>
+/// <param name="UserId">Raw user ID of the performing user — enables the UI to copy it.</param>
 /// <param name="PerformedBy">Username of the user who performed the action.</param>
 /// <param name="Detail">Optional extra context from the audit entry's Notes field.</param>
 public record TenantDashboardAuditEntry(
 	Guid Id,
 	DateTime Timestamp,
 	string Action,
+	string UserId,
 	string PerformedBy,
 	string? Detail
 );

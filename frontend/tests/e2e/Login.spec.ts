@@ -1,9 +1,5 @@
 import { test, expect } from '@playwright/test';
-
-// Requires: `pnpm dev` (auto-started by Playwright config) + `dotnet run` in
-// backend/src. The seed admin credentials are defined in appsettings.Development.json.
-const ADMIN_USER = 'admin';
-const ADMIN_PASS = 'Admin1234';
+import { ADMIN_USER, ADMIN_PASS } from './helpers';
 
 test.describe('Login', () => {
 	test('redirects unauthenticated users to the login page', async ({ page }) => {
@@ -30,14 +26,12 @@ test.describe('Login', () => {
 	});
 
 	test('logs out and returns to the login page', async ({ page }) => {
-		// Log in first.
 		await page.goto('/login');
 		await page.getByLabel('Username').fill(ADMIN_USER);
 		await page.getByRole('textbox', { name: 'Password' }).fill(ADMIN_PASS);
 		await page.getByRole('button', { name: 'Sign in' }).click();
 		await expect(page).toHaveURL('/');
 
-		// Click the logout button in the header.
 		await page.getByRole('button', { name: /log out/i }).click();
 		await expect(page).toHaveURL('/login');
 	});

@@ -72,13 +72,41 @@ public class ExclusionService
 	public async Task<ExclusionResponse> CreateAsync(Guid subnetId, CreateExclusionRequest req, CallerContext caller)
 	{
 		// Write access is stricter than read — TenantAdmin may only modify their own private subnets.
-		await GetAuthorizedSubnetAsync(subnetId, caller, requireWrite: true);
+		var subnet = await GetAuthorizedSubnetAsync(subnetId, caller, requireWrite: true);
 
 		// Validate both addresses before persisting. The allocator parses them at runtime;
 		// invalid values stored in the database would cause allocator failures later.
-		if (!IPAddress.TryParse(req.Start, out _) || !IPAddress.TryParse(req.End, out _))
+		if (!IPAddress.TryParse(req.Start, out var startIp))
 		{
-			throw new ValidationException("Invalid IP address");
+			throw new BadValueException("Invalid IP address for start.");
+		}
+
+		if (!IPAddress.TryParse(req.End, out var endIp))
+		{
+			throw new BadValueException("Invalid IP address for end.");
+		}
+
+		// Reject exclusion ranges that fall outside the subnet's CIDR — such ranges
+		// would never be evaluated by the allocator and almost certainly indicate a mistake.
+		if (!IPNetwork.TryParse(subnet.Cidr, out var network)
+			|| !network.Contains(startIp)
+			|| !network.Contains(endIp))
+		{
+			throw new BadValueException($"Exclusion range must fall within the subnet CIDR ({subnet.Cidr}).");
+		}
+
+		// Reject the network address (first IP) and broadcast address (last IP) because
+		// they are never usable host addresses and cannot appear in the allocator's pool.
+		var networkUint = IpAllocationService.IpToUint(network.BaseAddress);
+		var hostBits = 32 - network.PrefixLength;
+		var broadcastUint = networkUint | ((1u << hostBits) - 1);
+		var startUint = IpAllocationService.IpToUint(startIp);
+		var endUint = IpAllocationService.IpToUint(endIp);
+
+		if (startUint == networkUint || endUint == networkUint
+			|| startUint == broadcastUint || endUint == broadcastUint)
+		{
+			throw new BadValueException("Exclusion range must not include the network or broadcast address.");
 		}
 
 		var exclusion = new Exclusion

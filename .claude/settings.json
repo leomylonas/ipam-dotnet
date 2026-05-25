@@ -1,15 +1,35 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(dotnet add *)",
-      "Bash(dotnet build *)",
-      "Bash(dotnet ef *)",
-      "Bash(dotnet list *)",
-      "Bash(dotnet remove *)",
-      "Bash(dotnet script *)",
-      "Bash(dotnet test *)",
-      "Bash(dotnet tool *)",
-      "Bash(xargs cat)"
-    ]
-  }
+	"permissions": {
+		"allow": [
+			"Bash(dotnet add *)",
+			"Bash(dotnet build *)",
+			"Bash(dotnet ef *)",
+			"Bash(dotnet list *)",
+			"Bash(dotnet remove *)",
+			"Bash(dotnet script *)",
+			"Bash(dotnet test *)",
+			"Bash(dotnet tool *)",
+			"Bash(xargs cat)",
+			"Bash(pnpm *)",
+			"Bash(pnpm add *)",
+			"Bash(pnpm run *)",
+			"Bash(pnpm test *)",
+			"Bash(pnpm list *)",
+			"Bash(pnpm remove *)",
+			"Bash(pnpm update *)",
+			"Bash(pnpm install *)",
+			"Bash(pnpm build *)",
+			"Bash(pnpm exec * *)",
+			"Bash(pnpm pack *)",
+			"Bash(pnpm publish *)",
+			"Bash(pnpm version *)",
+			"Bash(pnpm link *)",
+			"Bash(pnpm unlink *)",
+			"Bash(pnpm outdated *)",
+			"Bash(pnpm audit *)",
+			"Bash(pnpm cache *)",
+			"Bash(pnpm config *)",
+			"Bash(pnpm help *)"
+		]
+	}
 }

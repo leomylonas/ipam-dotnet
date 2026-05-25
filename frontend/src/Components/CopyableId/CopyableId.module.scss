@@ -1,0 +1,25 @@
+.cell {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	font-family: var(--cds-code-01-font-family);
+	font-size: var(--cds-code-01-font-size);
+}
+
+.idFull {
+	font-family: var(--cds-code-01-font-family);
+	font-size: var(--cds-code-01-font-size);
+	user-select: all;
+}
+
+.copyBtn {
+	padding: 0 !important;
+	min-block-size: unset !important;
+	block-size: 1rem !important;
+	flex-shrink: 0;
+
+	svg {
+		width: 0.875rem;
+		height: 0.875rem;
+	}
+}

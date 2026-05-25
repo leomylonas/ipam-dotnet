@@ -6,6 +6,7 @@ This file defines the complete specification for the IPAM Service project. Use i
 
 ## Code Style
 
+### Backend (.NET)
 - **Indentation:** Hard tabs (`\t`), never spaces.
 - **Braces:** Always use braces on every block — `if`, `else`, `for`, `foreach`, `while`, `using`, etc. — even single-line early returns. No brace-less single-liners.
 - **Comments:** Write extensive comments throughout.
@@ -13,27 +14,56 @@ This file defines the complete specification for the IPAM Service project. Use i
   - Add verbose inline `//` comments inside method bodies explaining the logic and reasoning behind each step.
   - This overrides any default "no comments" behaviour.
 
+### Frontend (TypeScript / React)
+- **Indentation:** Hard tabs (`\t`), never spaces.
+- **Comments:** Minimal — only for non-obvious behaviour. No JSDoc, no multi-line comment blocks.
+- **Naming conventions:**
+  - Components, pages, and types: PascalCase.
+  - Hooks, functions, variables: camelCase.
+  - Directories: PascalCase for `Components/`, `Pages/`, `Services/`, `Hooks/`, `Stores/`, `Utils/`, `Styles/`.
+  - CSS Modules: camelCase class names.
+- **Forms:** React Hook Form + `@hookform/resolvers/zod` v5 + Zod v4 for all forms. Use `zodResolver` with `useForm`. Prefer `handleSubmit(async (data) => { ... })` and `mutation.mutateAsync`.
+- **Each service file** exports a class (`FooService`), a Zod schema per response shape, inferred TypeScript types, and a `useFooService()` hook that returns a `useMemo`-memoised instance.
+- **Each hook file** exports individual named hooks (e.g. `useFooQuery`, `useFooMutation`) plus a composite `useFoo()` hook returning all related hooks as an object, for use when a component needs multiple operations.
+
 ---
 
 ## Project Overview
 
-A generic, multi-tenant IP Address Management (IPAM) REST API built on .NET 10 and ASP.NET Core. It supports multiple isolated tenancies, each with their own private subnets and users, alongside globally shared subnets managed by a GlobalAdmin. Authentication is stateless HTTP Basic Auth on every request.
+A generic, multi-tenant IP Address Management (IPAM) system with a .NET 10 REST API backend and a React SPA frontend. It supports multiple isolated tenancies, each with their own private subnets and users, alongside globally shared subnets managed by a GlobalAdmin. The backend supports both HTTP Basic Auth (for API consumers) and cookie-based auth (for the React UI).
 
 ---
 
 ## Stack
+
+### Backend
 
 | Concern | Technology |
 |---|---|
 | Framework | .NET 10 / ASP.NET Core Web API |
 | ORM | Entity Framework Core 10 |
 | Identity | ASP.NET Identity |
-| Auth | Stateless HTTP Basic Auth (no JWT, no cookies, no sessions) |
+| Auth | Stateless HTTP Basic Auth + cookie auth (for React UI) |
 | Logging | Serilog (async console sink, configured via `appsettings.json`) |
 | API Docs | OpenAPI via Scalar (Development only, at `/scalar`) |
 | Default DB | SQLite |
 | Alt DB | MySQL (Oracle `MySql.EntityFrameworkCore`), PostgreSQL (Npgsql) |
 | Migrations | Separate migration folders per provider, all in the main assembly |
+
+### Frontend
+
+| Concern | Technology |
+|---|---|
+| Framework | React 18 + TypeScript + Vite |
+| UI Library | Carbon Design System (`@carbon/react` v1, `@carbon/icons-react`) |
+| Routing | TanStack React Router v1 |
+| Data fetching | TanStack React Query v5 |
+| Forms | React Hook Form v7 + `@hookform/resolvers` v5 + Zod v4 |
+| HTTP client | `@leomylonas/json-fetch-client` |
+| State | `react-granular-store` (auth store only) |
+| CSS | CSS Modules + Sass |
+| Package manager | pnpm |
+| Tests | Vitest + Testing Library (unit/component), Playwright (E2E) |
 
 ---
 
@@ -103,7 +133,7 @@ SubnetId      Guid (FK -> Subnet)
 TenancyId     Guid (FK -> Tenancy)
 ```
 
-Used to restrict a shared subnet to specific tenancies. If no rows exist for a shared subnet, it is accessible to all tenancies.
+Controls which tenancies may access a shared subnet. A tenancy must have an explicit grant row to allocate from the subnet. If no rows exist for a shared subnet, it is inaccessible to all tenancies.
 
 ### Exclusion
 ```
@@ -114,19 +144,20 @@ End           string (IP address, same as Start for single IP)
 Description   string
 ```
 
-Exclusions apply to both shared and private subnets. Single IPs use Start == End.
+Exclusions apply to both shared and private subnets. Single IPs use Start == End. Exclusion ranges must not include the network or broadcast address of the subnet.
 
 ### Allocation
 ```
 Id            Guid
 IpAddress     string
 UserId        string (FK -> ApplicationUser)
-TenancyId     Guid (FK -> Tenancy)
 SubnetId      Guid (FK -> Subnet)
 Description   string
 AllocatedAt   DateTime (UTC)
 BulkId        Guid? (groups IPs from a single bulk request, nullable)
 ```
+
+Tenancy is not stored directly on `Allocation` — it is derived by joining with the `Subnet` (via `SubnetId`). This avoids redundancy and allows GlobalAdmin allocations where the effective tenancy is the subnet owner's tenancy.
 
 ### AllocationTag
 ```
@@ -154,7 +185,7 @@ Notes         string?
 
 ## API Endpoints
 
-All endpoints require HTTP Basic Auth except `/health`.
+All endpoints require auth (Basic or cookie) except `/health`.
 
 ### Tenancies
 
@@ -184,6 +215,7 @@ When creating a tenancy, the request body must include initial TenantAdmin crede
 | `POST` | `/api/subnets/shared` | GlobalAdmin | Create a shared subnet |
 | `PUT` | `/api/subnets/shared/{id}` | GlobalAdmin | Update shared subnet name and description |
 | `DELETE` | `/api/subnets/shared/{id}` | GlobalAdmin | Delete a shared subnet |
+| `GET` | `/api/subnets/shared/{id}/access` | GlobalAdmin | List tenancies with explicit access grants to a shared subnet |
 | `POST` | `/api/subnets/shared/{id}/access` | GlobalAdmin | Restrict subnet to a specific tenancy |
 | `DELETE` | `/api/subnets/shared/{id}/access/{tenancyId}` | GlobalAdmin | Remove tenancy restriction |
 
@@ -210,8 +242,8 @@ When creating a tenancy, the request body must include initial TenantAdmin crede
 | Method | Route | Access | Description |
 |---|---|---|---|
 | `GET` | `/api/allocations` | GlobalAdmin: all; TenantAdmin/User: own tenancy | List allocations. Filterable by `?tagKey=&tagValue=` |
-| `POST` | `/api/allocations` | TenantAdmin/User | Request next available IP from a specified subnet |
-| `POST` | `/api/allocations/bulk` | TenantAdmin/User | Request N consecutive IPs from a subnet. Returns 409 if no contiguous block exists |
+| `POST` | `/api/allocations` | All authenticated roles | Request next available IP from a specified subnet |
+| `POST` | `/api/allocations/bulk` | All authenticated roles | Request N consecutive IPs from a subnet. Returns 409 if no contiguous block exists |
 | `GET` | `/api/subnets/{subnetId}/check/{ip}` | TenantAdmin/User (accessible subnets only) | Check if a specific IP is available |
 | `DELETE` | `/api/allocations/{id}` | GlobalAdmin: any; TenantAdmin: own tenancy; User: own only | Release an allocation |
 
@@ -222,7 +254,7 @@ Bulk allocations share a `BulkId` but are individually releasable, each with the
 | Method | Route | Access | Description |
 |---|---|---|---|
 | `GET` | `/api/allocations/{id}/tags` | GlobalAdmin: any; TenantAdmin/User: own tenancy | List tags on an allocation |
-| `PUT` | `/api/allocations/{id}/tags` | GlobalAdmin: any; TenantAdmin/User: own tenancy | Full replace of all tags (key-value map in body) |
+| `PUT` | `/api/allocations/{id}/tags` | GlobalAdmin: any; TenantAdmin/User: own tenancy | Full replace of all tags (key-value map in body). Returns `200 OK` with the saved tag list. |
 | `DELETE` | `/api/allocations/{id}/tags/{key}` | GlobalAdmin: any; TenantAdmin/User: own tenancy | Delete a single tag by key |
 
 ### Stats
@@ -253,6 +285,8 @@ Bulk allocations share a `BulkId` but are individually releasable, each with the
 | `GET` | `/dashboard/tenant` | TenantAdmin | Tenancy-scoped stats, exhaustion alerts, and 10 recent audit entries |
 | `GET` | `/dashboard/user` | TenantUser | Accessible subnets with free IP counts and recent allocations |
 
+Dashboard audit entry DTOs include `userId` (string) and `tenancyId` (Guid?, global only) alongside the human-readable `performedBy` / `tenancyName` display fields.
+
 ### Health
 
 | Method | Route | Access | Description |
@@ -280,6 +314,15 @@ Bulk allocations share a `BulkId` but are individually releasable, each with the
 - Private subnets must fall within RFC1918 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
 - CIDR must be valid and parseable
 - Overlapping subnets within the same tenancy should be rejected
+
+### Exclusion Validation
+- Both start and end IPs must be valid IPv4 addresses
+- The range must fall within the subnet's CIDR
+- Start must be ≤ end (computed via `IpAllocationService.IpToUint`)
+- The range must not include the network address or broadcast address of the subnet
+
+### Subnet Utilisation
+Utilisation is calculated as `(allocatedCount + excludedCount) / totalIps`. This reflects the true "unavailable" fraction — excluded IPs count as consumed capacity even if not allocated. Guard against division by zero when `totalIps == 0`.
 
 ---
 
@@ -318,10 +361,12 @@ All controllers inherit `IpamControllerBase` and wrap their action bodies in `Ex
 | `NotFoundException` | 404 | `detail` included when exception carries a message |
 | `ForbiddenException` | 403 | No body — access denial is never explained |
 | `ConflictException` | 409 | Business-rule conflict message in `detail` |
-| `ValidationException` | 400 | Validation failure message in `detail` |
+| `BadValueException` | 400 | Format/parse errors (invalid CIDR, invalid IP, network/broadcast address). Lives in `ServiceExceptions.cs`. |
 | `IdentityOperationException` | 400 | Identity error descriptions in `errors` extension array |
 | `NoAvailableIpException` | 409 | No free IPs remain in the subnet |
 | `NoContiguousBlockException` | 409 | No run of N consecutive free IPs exists |
+
+`BadValueException` is used for format/parse failures not tied to a named field (e.g., unparseable CIDR, invalid IP address string, exclusion hitting network/broadcast). It is distinct from `System.ComponentModel.DataAnnotations.ValidationException` — do not confuse the two.
 
 All typed exceptions are defined in `Services/ServiceExceptions.cs`, except `NoAvailableIpException` and `NoContiguousBlockException` which live in `Services/IpAllocationService.cs`.
 
@@ -369,11 +414,11 @@ Business logic is split across domain-area services, all registered as scoped. C
 |---|---|
 | `TenancyService` | Tenancy lifecycle (create, list, update, delete with cascade) |
 | `UserService` | User CRUD and password management |
-| `SubnetService` | Shared and private subnet CRUD, tenancy access grants |
+| `SubnetService` | Shared and private subnet CRUD, tenancy access grants, `ListAccessAsync` |
 | `SubnetValidationService` | CIDR parsing, RFC1918 checks, overlap detection |
-| `ExclusionService` | Exclusion CRUD with subnet-access enforcement |
-| `IpAllocationService` | Single and bulk IP allocation, release, IP availability check |
-| `TagService` | Tag list, full replace, single delete |
+| `ExclusionService` | Exclusion CRUD with subnet-access enforcement and network/broadcast validation |
+| `IpAllocationService` | Single and bulk IP allocation, release, IP availability check. Also defines `IpToUint` (public static helper) used by `ExclusionService`. |
+| `TagService` | Tag list, full replace (returns `List<TagResponse>`), single delete |
 | `StatsService` | Subnet utilisation stats |
 | `AuditService` | Writes and queries audit log entries |
 
@@ -399,64 +444,192 @@ public record CallerContext(string UserId, string Role, Guid? TenancyId)
 
 ```
 IpamService/
-├── src/
-│   ├── Auth/
-│   │   └── BasicAuthHandler.cs
-│   ├── Config/
-│   │   └── IpamOptions.cs          # Seed config binding
-│   ├── Controllers/
-│   │   ├── IpamControllerBase.cs   # GetCaller() + ExecuteAsync() + exception mapping
-│   │   ├── TenanciesController.cs
-│   │   ├── UsersController.cs
-│   │   ├── SharedSubnetsController.cs
-│   │   ├── PrivateSubnetsController.cs
-│   │   ├── ExclusionsController.cs
-│   │   ├── AllocationsController.cs
-│   │   ├── TagsController.cs
-│   │   ├── StatsController.cs
-│   │   └── AuditController.cs
-│   ├── Data/
-│   │   ├── AppDbContext.cs
-│   │   ├── ProviderDbContexts.cs   # SqliteAppDbContext / MySqlAppDbContext / PostgresAppDbContext
-│   │   ├── DesignTimeDbContextFactories.cs
-│   │   └── Migrations/
-│   │       ├── SQLite/
-│   │       ├── MySQL/
-│   │       └── Postgres/
-│   ├── Models/
-│   │   ├── Roles.cs                # const string GlobalAdmin / TenantAdmin / TenantUser / TenantMembers
-│   │   ├── Tenancy.cs
-│   │   ├── ApplicationUser.cs
-│   │   ├── Subnet.cs
-│   │   ├── SubnetTenancyAccess.cs
-│   │   ├── Exclusion.cs
-│   │   ├── Allocation.cs
-│   │   ├── AllocationTag.cs
-│   │   ├── AuditLog.cs
-│   │   └── DTOs/
-│   │       ├── TenancyDtos.cs
-│   │       ├── UserDtos.cs
-│   │       ├── SubnetDtos.cs
-│   │       ├── ExclusionDtos.cs
-│   │       ├── AllocationDtos.cs
-│   │       ├── TagDtos.cs
-│   │       ├── StatsDtos.cs
-│   │       └── AuditDtos.cs
-│   ├── Services/
-│   │   ├── CallerContext.cs        # record passed from controller to service
-│   │   ├── ServiceExceptions.cs   # NotFoundException / ForbiddenException / ConflictException / ValidationException / IdentityOperationException
-│   │   ├── AuditService.cs
-│   │   ├── IpAllocationService.cs # also defines NoAvailableIpException / NoContiguousBlockException
-│   │   ├── SubnetValidationService.cs
-│   │   ├── TenancyService.cs
-│   │   ├── UserService.cs
-│   │   ├── SubnetService.cs
-│   │   ├── ExclusionService.cs
-│   │   ├── TagService.cs
-│   │   └── StatsService.cs
-│   ├── appsettings.json
-│   ├── appsettings.Development.json
-│   └── Program.cs
+├── backend/
+│   └── src/
+│       ├── Auth/
+│       │   └── BasicAuthHandler.cs
+│       ├── Config/
+│       │   └── IpamOptions.cs          # Seed config binding
+│       ├── Controllers/
+│       │   ├── IpamControllerBase.cs   # GetCaller() + ExecuteAsync() + exception mapping
+│       │   ├── TenanciesController.cs
+│       │   ├── UsersController.cs
+│       │   ├── SharedSubnetsController.cs
+│       │   ├── PrivateSubnetsController.cs
+│       │   ├── ExclusionsController.cs
+│       │   ├── AllocationsController.cs
+│       │   ├── TagsController.cs
+│       │   ├── StatsController.cs
+│       │   ├── AuditController.cs
+│       │   ├── AuthController.cs       # /auth/login, /auth/logout, /auth/me
+│       │   └── DashboardController.cs
+│       ├── Data/
+│       │   ├── AppDbContext.cs
+│       │   ├── ProviderDbContexts.cs   # SqliteAppDbContext / MySqlAppDbContext / PostgresAppDbContext
+│       │   ├── DesignTimeDbContextFactories.cs
+│       │   └── Migrations/
+│       │       ├── SQLite/
+│       │       ├── MySQL/
+│       │       └── Postgres/
+│       ├── Models/
+│       │   ├── Roles.cs                # const string GlobalAdmin / TenantAdmin / TenantUser / TenantMembers
+│       │   ├── Tenancy.cs
+│       │   ├── ApplicationUser.cs
+│       │   ├── Subnet.cs
+│       │   ├── SubnetTenancyAccess.cs
+│       │   ├── Exclusion.cs
+│       │   ├── Allocation.cs
+│       │   ├── AllocationTag.cs
+│       │   ├── AuditLog.cs
+│       │   └── DTOs/
+│       │       ├── TenancyDtos.cs
+│       │       ├── UserDtos.cs
+│       │       ├── SubnetDtos.cs
+│       │       ├── ExclusionDtos.cs
+│       │       ├── AllocationDtos.cs
+│       │       ├── TagDtos.cs
+│       │       ├── StatsDtos.cs
+│       │       ├── AuditDtos.cs
+│       │       └── DashboardDtos.cs
+│       ├── Services/
+│       │   ├── CallerContext.cs        # record passed from controller to service
+│       │   ├── ServiceExceptions.cs   # NotFoundException / ForbiddenException / ConflictException / BadValueException / IdentityOperationException
+│       │   ├── AuditService.cs
+│       │   ├── IpAllocationService.cs # also defines NoAvailableIpException / NoContiguousBlockException / IpToUint
+│       │   ├── SubnetValidationService.cs
+│       │   ├── TenancyService.cs
+│       │   ├── UserService.cs
+│       │   ├── SubnetService.cs
+│       │   ├── ExclusionService.cs
+│       │   ├── TagService.cs
+│       │   ├── StatsService.cs
+│       │   └── DashboardService.cs
+│       ├── appsettings.json
+│       ├── appsettings.Development.json
+│       └── Program.cs
+├── frontend/
+│   └── src/
+│       ├── Components/
+│       │   ├── AppShell.tsx / .module.scss      # Layout shell (header + side nav + outlet)
+│       │   ├── ThemeProvider.tsx                # Carbon g100/white theme toggling
+│       │   ├── Allocations/
+│       │   │   ├── AllocationList.tsx / .module.scss  # Smart list for /allocations; owns filter toolbar + all modals
+│       │   │   ├── AllocationSection.tsx / .module.scss  # Smart section used by subnet detail pages
+│       │   │   ├── AllocateModal.tsx            # Single-IP allocation form
+│       │   │   ├── BulkAllocateModal.tsx        # Bulk allocation form
+│       │   │   └── TagsModal.tsx / .module.scss # View/edit tags for an allocation
+│       │   ├── Audit/
+│       │   │   └── AuditList.tsx               # Smart list for /audit; fetches users+subnets for name resolution
+│       │   ├── CopyableId/
+│       │   │   ├── CopyableId.tsx               # Truncated ID + Carbon Tooltip + copy button
+│       │   │   └── CopyableId.module.scss
+│       │   ├── Dashboard/
+│       │   │   ├── GlobalAdminDashboard.tsx     # GlobalAdmin view: system metrics, exhaustion alerts, audit
+│       │   │   ├── TenantAdminDashboard.tsx / .module.scss  # TenantAdmin view: tenancy metrics, exhaustion alerts, audit
+│       │   │   └── TenantUserDashboard.tsx      # TenantUser view: accessible subnets + recent allocations
+│       │   ├── DataTable/
+│       │   │   ├── IpamDataTable.tsx            # Generic Carbon table (columns, rowActions, onRowClick, toolbarContent, onSearchChange)
+│       │   │   └── IpamDataTable.module.scss
+│       │   ├── Exclusions/
+│       │   │   ├── ExclusionSection.tsx / .module.scss  # Smart section; shared by SubnetDetailPage + SharedSubnetDetailPage
+│       │   │   ├── CreateExclusionModal.tsx
+│       │   │   └── EditExclusionModal.tsx
+│       │   ├── Feedback/
+│       │   │   ├── ErrorBanner.tsx              # Renders FetchClientError as Carbon InlineNotification
+│       │   │   └── ErrorBanner.module.scss
+│       │   ├── Metric/
+│       │   │   ├── MetricCard.tsx               # Stat card used on dashboard/detail pages
+│       │   │   └── MetricCard.module.scss
+│       │   ├── Modal/
+│       │   │   └── ConfirmModal.tsx             # Reusable danger-confirm modal (only generic modal remaining here)
+│       │   ├── Navigation/
+│       │   │   ├── AppHeader.tsx / .test.tsx    # Carbon Header with theme switcher
+│       │   │   ├── AppSideNav.tsx / .module.scss / .test.tsx
+│       │   │   ├── NavItem.tsx
+│       │   │   └── ThemeSwitcher.tsx / .module.scss / .test.tsx
+│       │   ├── PageHeader/
+│       │   │   ├── PageHeader.tsx               # Page title + description + optional "Add" button
+│       │   │   └── PageHeader.module.scss
+│       │   ├── SharedSubnets/
+│       │   │   ├── SharedSubnetList.tsx         # Smart list; navigates to /shared-subnets/$subnetId on row click
+│       │   │   ├── AccessSection.tsx / .module.scss  # Smart section for tenancy access grants (GlobalAdmin only)
+│       │   │   ├── CreateSharedSubnetModal.tsx
+│       │   │   ├── EditSharedSubnetModal.tsx
+│       │   │   └── GrantAccessModal.tsx
+│       │   ├── Subnets/
+│       │   │   ├── SubnetList.tsx               # Smart list; navigates to /subnets/$subnetId on row click
+│       │   │   ├── SubnetMetrics.tsx            # Reusable metrics grid for subnet detail pages (total/allocated/free/excluded/utilisation)
+│       │   │   ├── CreateSubnetModal.tsx
+│       │   │   └── EditSubnetModal.tsx
+│       │   ├── Tenancies/
+│       │   │   ├── TenancyList.tsx              # Smart list; owns edit/delete modal state
+│       │   │   ├── CreateTenancyModal.tsx
+│       │   │   └── EditTenancyModal.tsx
+│       │   └── Users/
+│       │       ├── UserList.tsx                 # Smart list; reads authStore directly for caller context
+│       │       ├── CreateUserModal.tsx
+│       │       └── EditUserModal.tsx
+│       ├── Hooks/
+│       │   ├── useAllocations.ts
+│       │   ├── useAudit.ts
+│       │   ├── useDashboard.ts
+│       │   ├── useExclusions.ts
+│       │   ├── useModal.tsx             # Generic modal open/close hook: useModal(renderFn) → { isOpen, open, close, modal }
+│       │   ├── useStats.ts
+│       │   ├── useSubnets.ts
+│       │   ├── useTags.ts
+│       │   ├── useTenancies.ts
+│       │   └── useUsers.ts
+│       ├── Pages/
+│       │   ├── Page.module.scss                 # Shared .page class (padding, max-width)
+│       │   ├── AllocationsPage.tsx / .module.scss
+│       │   ├── AuditPage.tsx / .module.scss
+│       │   ├── DashboardPage.tsx / .module.scss / .test.tsx  # Thin orchestrator — renders role-appropriate Dashboard component
+│       │   ├── LoginPage.tsx / .module.scss / .test.tsx
+│       │   ├── NotFoundPage.tsx / .module.scss / .test.tsx
+│       │   ├── SharedSubnetsPage.tsx            # Thin orchestrator — no .module.scss
+│       │   ├── SharedSubnetDetailPage.tsx       # Back button + SubnetMetrics + AccessSection + ExclusionSection + AllocationSection
+│       │   ├── SubnetDetailPage.tsx             # Back button + SubnetMetrics + ExclusionSection + AllocationSection
+│       │   ├── SubnetsPage.tsx                  # Thin orchestrator — no .module.scss
+│       │   ├── TenanciesPage.tsx                # Thin orchestrator — no .module.scss
+│       │   └── UsersPage.tsx                    # Thin orchestrator — no .module.scss
+│       ├── Services/
+│       │   ├── AllocationsService.ts
+│       │   ├── AuditService.ts
+│       │   ├── AuthService.ts
+│       │   ├── DashboardService.ts
+│       │   ├── ExclusionsService.ts
+│       │   ├── StatsService.ts
+│       │   ├── SubnetsService.ts
+│       │   ├── TagsService.ts
+│       │   ├── TenanciesService.ts
+│       │   └── UsersService.ts
+│       ├── Stores/
+│       │   ├── AuthStore.ts / .test.ts          # react-granular-store singleton; holds AuthResponse | null
+│       ├── Styles/
+│       │   ├── Main.scss                        # Carbon theme import + global resets
+│       │   └── _Utilities.scss
+│       ├── Utils/
+│       │   ├── AllocationUtils.ts               # parseTagFilter(term) → AllocationFilter | undefined
+│       │   ├── DashboardUtils.ts                # formatTs(iso) and utilisationIntent(pct)
+│       │   └── FetchClient.ts                   # Singleton FetchClient; useFetchClient() hook
+│       ├── Main.tsx                             # App entry: QueryClientProvider + RouterProvider + auth-check
+│       ├── Router.tsx                           # TanStack Router route tree with per-route beforeLoad guards
+│       └── ViteEnv.d.ts
+├── frontend/
+│   └── tests/
+│       ├── e2e/
+│       │   ├── helpers.ts               # Shared constants (ADMIN_USER/PASS, TENANT_ADMIN_PASS, TENANT_USER_PASS) + API helper fns
+│       │   ├── global-teardown.ts       # Deletes ipam-e2e-*.db files from tmpdir after test run
+│       │   ├── Login.spec.ts
+│       │   ├── Dashboard.spec.ts
+│       │   ├── Tenancies.spec.ts
+│       │   ├── Users.spec.ts
+│       │   ├── SharedSubnets.spec.ts
+│       │   ├── Subnets.spec.ts
+│       │   ├── Allocations.spec.ts
+│       │   └── Audit.spec.ts
+│       └── (unit tests live alongside source files as *.test.tsx)
 ├── tests/
 │   ├── Unit/
 │   │   ├── Services/
@@ -466,7 +639,7 @@ IpamService/
 │   │       └── BasicAuthHandlerTests.cs
 │   ├── Integration/
 │   │   └── Controllers/
-│   │       ├── ErrorHandlingTests.cs                        # Problem Details + global exception handler
+│   │       ├── ErrorHandlingTests.cs
 │   │       ├── TenanciesControllerTests.cs
 │   │       ├── UsersControllerTests.cs
 │   │       ├── SharedSubnetsControllerTests.cs
@@ -477,7 +650,8 @@ IpamService/
 │   │       ├── TenancyLifecycleTests.cs
 │   │       ├── BulkAllocationTests.cs
 │   │       ├── SharedSubnetAccessTests.cs
-│   │       └── TagFilteringTests.cs
+│   │       ├── TagFilteringTests.cs
+│   │       └── AllocationIsolationTests.cs
 │   ├── Helpers/
 │   │   ├── TestWebApplicationFactory.cs
 │   │   ├── MySqlTestWebApplicationFactory.cs
@@ -495,6 +669,89 @@ IpamService/
 ├── IpamService.sln
 └── README.md
 ```
+
+---
+
+## Frontend Architecture
+
+### Auth flow
+- On app load (`Main.tsx`), `GET /auth/me` is called before the router renders. While in flight, `authStore.isCheckingAuth` is true and the app renders nothing (prevents login flash).
+- On success, the user is stored in `authStore`. On 401, the store remains unauthenticated and the router redirects to `/login`.
+- `POST /auth/login` is the login form action; on success the user is stored and the router navigates to `/`.
+- `POST /auth/logout` clears the server cookie; `authStore` is reset to null.
+
+### Route guards
+All auth-guarded routes use `beforeLoad` in `Router.tsx`. The guard reads from `authStore` synchronously (not React context) to avoid flashing protected page content before a redirect.
+
+Role-based route restrictions:
+- `/tenancies`, `/shared-subnets`, `/shared-subnets/$subnetId` — GlobalAdmin only
+- `/users`, `/subnets`, `/subnets/$subnetId`, `/audit` — GlobalAdmin + TenantAdmin (TenantUser redirected to `/`)
+- `/` (dashboard), `/allocations` — all authenticated roles
+
+### Component organization
+Components are organized by resource domain under `Components/`. Each resource directory contains its smart list/section component(s) and all related modals. Pages are thin orchestrators that import these smart components and pass minimal props.
+
+- **Smart list components** (e.g. `TenancyList`, `SharedSubnetList`) — no required props; own their data queries, mutation state, and inline modal open/close state. Used directly from page components.
+- **Smart section components** (e.g. `ExclusionSection`, `AllocationSection`, `AccessSection`) — accept a single `subnetId: string` prop; own everything else. Designed for embedding in detail pages. `ExclusionSection` is shared between `SubnetDetailPage` and `SharedSubnetDetailPage`.
+- **Modal components** — live in the same directory as their owning list/section. `Components/Modal/ConfirmModal.tsx` is the only generic modal remaining in the `Modal/` directory. It accepts an optional `confirmLabel?: string` prop (defaults to `'Delete'`) so the same modal serves Release, Revoke, and Delete actions. The loading label is auto-derived by stripping a trailing `e` and appending `ing…`.
+
+### IpamDataTable
+`Components/DataTable/IpamDataTable.tsx` is the generic Carbon table wrapper. Key props:
+- `columns: ColumnDef<TRow>[]` — each has `key`, `header`, `render(row) => ReactNode`
+- `rows: TRow[]` — each must have a string `id` field
+- `rowActions?: RowAction<TRow>[]` — renders `OverflowMenu` column when non-empty
+- `onRowClick?: (row) => void` — makes rows clickable with pointer cursor
+- `toolbarContent?: ReactNode` — optional content rendered inside `TableToolbarContent`
+- `isLoading` — renders inline `SkeletonText` rows (5 placeholder rows) while true; does **not** replace the toolbar
+- `onSearchChange?: (term: string) => void` — when provided, the parent owns filtering; IpamDataTable fires this with a 400ms debounce (immediate on clear). When omitted, IpamDataTable performs client-side string filtering.
+- `emptyMessage?: string` — message shown when `rows` is empty and not loading
+
+**Inline skeleton rows:** `isLoading` no longer triggers `DataTableSkeleton` (which would unmount the toolbar and lose search focus). Instead, `SkeletonText` cells are rendered inside the `TableBody` so the toolbar remains mounted during fetches.
+
+**Debounce in IpamDataTable:** The `onSearchChange` callback is debounced at 400ms internally. Consumers do not need to debounce it themselves. The debounce fires immediately when the search input is cleared so there is no delay on clear.
+
+**Carbon OverflowMenu scrollbar fix:** Carbon's `.cds--data-table-content` inner wrapper has `overflow-x: auto`, which causes a horizontal scrollbar when the OverflowMenu tooltip renders near the edge. Override with `:global(.cds--data-table-content) { overflow-x: clip; }` inside the `.container` SCSS rule.
+
+**Carbon OverflowMenu `iconDescription`:** The `OverflowMenu` component requires `iconDescription="Open menu"` explicitly. Without it, the default is `"Options"`, and Playwright/accessibility queries using `getByRole('button', { name: 'Open menu' })` will fail.
+
+**Toolbar layout:** Carbon's `TableToolbarContent` has a fixed `block-size: 3rem` that cannot accommodate tall inputs or multiple rows. For any toolbar with more than a simple search, render the toolbar as a standalone `<div>` **outside** `IpamDataTable` with `margin-bottom: 1rem`. Pass nothing to `toolbarContent`.
+
+### CopyableId component
+`Components/CopyableId/CopyableId.tsx` — used wherever a UUID is displayed to the user. Shows a truncated label (e.g. `abc12345…`) with a Carbon `Tooltip` containing the full ID as `<code>` and a ghost `Button` that copies it. The icon swaps to `CopyLink` for 1.5 seconds after a successful copy. Always call `e.stopPropagation()` in the click handler to prevent row-click handlers from firing.
+
+Used in: `UserList` (tenancy column), `DashboardPage` (audit user/tenancy columns), `AllocationList` (subnet column), `AuditList` (user and subnet columns).
+
+### ErrorBanner
+`Components/Feedback/ErrorBanner.tsx` — takes `error: unknown` (typically `FetchClientError` from the HTTP client) and a `title` string. Renders a Carbon `InlineNotification` with the API error detail when present. Pass `mutation.error` directly.
+
+### Forms pattern
+All modals use React Hook Form with `zodResolver`. Mutations use `mutateAsync` so errors propagate to `mutation.error` (displayed via `ErrorBanner`) rather than throwing. Always call `mutation.reset()` alongside `reset()` in `handleClose` so stale errors are cleared when the modal reopens.
+
+### Service / Hook pattern
+Each `*Service.ts` exports:
+- Zod schemas (`fooSchema`, `fooListSchema`, etc.)
+- Inferred TypeScript types (`type Foo = z.infer<typeof fooSchema>`)
+- Zod schemas for request bodies (used directly as `zodResolver` argument in forms)
+- A `FooService` class with all API methods
+- `useFooService()` hook returning a `useMemo`-memoised service instance
+
+Each `use*.ts` exports individual named hooks plus a composite `useFoo()` returning all hooks as an object. Query key factories are defined as `fooKeys` const objects.
+
+### Vite dev proxy
+`vite.config.ts` proxies `/api`, `/auth`, `/dashboard`, and `/health` to the backend. The target is read from `process.env.VITE_BACKEND_URL` (fallback `http://localhost:5101`). E2E tests set this env var to `http://localhost:5201` via the Playwright `webServer` config so E2E requests hit the dedicated test backend rather than a running dev instance.
+
+### Known gotchas
+- **TanStack Router `from` paths:** Do not add `from` to `useNavigate` or `Link` unless the route is in the same tree — it causes type errors.
+- **`@hookform/resolvers` v5 + Zod v4:** Use `zodResolver` from `@hookform/resolvers/zod` normally. Zod `z.coerce` works but `z.uuid()` and `.nullable()` behave slightly differently in v4 — verify schemas with the actual API response shape.
+- **Tags PUT returns 200:** `PUT /api/allocations/{id}/tags` returns `200 OK` with the full tag list (not `204 No Content`). The `putJson` call must pass the response schema.
+- **Dashboard DTOs include IDs:** Both `globalDashboardAuditEntrySchema` and `tenantDashboardAuditEntrySchema` include `userId: z.string()`. The global schema also includes `tenancyId: z.uuid().nullable()`. These are present alongside the human-readable `performedBy`/`tenancyName` display fields to support `CopyableId`.
+- **`GET /api/subnets/shared/{id}/access`** is GlobalAdmin only. The access query hook (`useSubnetAccessQuery`) is disabled when `subnetId` is empty string. Grant/revoke mutations both invalidate `subnetKeys.access(subnetId)`.
+- **Edit self — role select:** When a user edits their own profile (`user.id === callerId`), the role select must be hidden. Showing it would let a user demote/promote themselves.
+- **GlobalAdmin allocation — tenancy select first:** `AllocateModal` and `BulkAllocateModal` are fully self-contained (no `subnetOptions` prop). For GlobalAdmin callers, they render a tenancy `Select` first; `useWatch` on `tenancyId` drives `usePrivateQuery(selectedTenancyId)` so the subnet list loads dynamically. The `tenancyId` field is stripped before sending the allocation request to the API.
+- **Allocation has no `TenancyId`:** `allocationSchema` in `AllocationsService.ts` does not include `tenancyId`. Tenancy is derived server-side via the subnet. Do not add it back.
+- **`onSearchChange` debounce owned by IpamDataTable:** Never wrap `onSearchChange` in an external debounce — IpamDataTable debounces it internally at 400ms. Wrapping it again will cause double-debouncing.
+- **Carbon Tag text duplication:** Carbon's `<Tag>` renders the label text twice — once in `cds--tag__label` and again in an accessibility tooltip `<span>`. `getByText('someTag')` will match both elements and trigger Playwright strict-mode errors. Use `.locator('.cds--tag')` to count tags, or `.first()` to target the first match.
+- **Playwright `count()` vs `waitFor()`:** `count()` returns immediately without waiting for the DOM to settle. Use `.waitFor({ state: 'visible', timeout })` on a specific locator when you need to assert presence after an async mutation.
 
 ---
 
@@ -533,6 +790,30 @@ There is no `DatabaseFixture` class — isolation is achieved via unique per-ins
 - `BulkAllocationTests` — successful bulk, verify BulkId grouping, individual release, failure case with no contiguous block
 - `SharedSubnetAccessTests` — create shared subnet → restrict to tenancy → verify other tenancy cannot allocate → grant access → verify can allocate
 - `TagFilteringTests` — allocate IPs → tag them → filter by tag key/value → verify correct results returned
+- `AllocationIsolationTests` — two tenancies, two subnets; verifies TenantUser cannot see or allocate from another tenancy's subnet; GlobalAdmin sees all allocations across tenancies
+
+### Frontend E2E Tests (Playwright)
+
+Run with: `cd frontend && pnpm exec playwright test`
+
+No manual server startup is needed — Playwright starts dedicated instances automatically.
+
+**Infrastructure:**
+- Backend: `http://localhost:5201` (port never collides with the dev port 5101)
+- Frontend (Vite): `http://localhost:5174` (port never collides with the dev port 5173)
+- Vite proxies to the backend via `VITE_BACKEND_URL=http://localhost:5201` set in the `webServer` env
+- Each run uses a fresh SQLite database: `path.join(os.tmpdir(), 'ipam-e2e-<timestamp>.db')` — eliminates data pollution between runs
+- `globalTeardown` (`tests/e2e/global-teardown.ts`) deletes all `ipam-e2e-*.db` files (and WAL companions) from tmpdir after the run
+- `fullyParallel: false`, `workers: 4` — spec files run in parallel across workers, but tests within each file run sequentially. This ensures each file's `beforeAll` runs exactly once, preventing concurrent seed conflicts on SQLite.
+- `reuseExistingServer: false` — tests always start a clean server; they will fail if the port is already in use
+
+**Helpers (`tests/e2e/helpers.ts`):**
+- Constants: `ADMIN_USER`, `ADMIN_PASS`, `TENANT_ADMIN_PASS = 'Tadmin1234!'`, `TENANT_USER_PASS = 'Tuser1234!'`, `adminBasicAuth`
+- `loginAs(page, username, password)` — navigates to `/login` and completes the form
+- `uniqueName(prefix)` — returns `prefix-<timestamp>` for collision-free resource names
+- API helpers (use Basic auth, called from `beforeAll`/`afterAll`): `createTenancy`, `deleteTenancy`, `createSharedSubnet`, `deleteSharedSubnet`, `createPrivateSubnet`, `createUser`
+
+**Spec files:** `Login`, `Dashboard`, `Tenancies`, `Users`, `SharedSubnets`, `Subnets`, `Allocations`, `Audit` — each creates its own tenancy/users in `beforeAll` and deletes them in `afterAll`.
 
 ---
 
@@ -580,10 +861,12 @@ The `.dockerignore` should exclude `bin/`, `obj/`, `*.Tests/`, `.git/`, `.github
 - Return `404` when a resource is not found, `403` when access is denied to a known resource. Both are Problem Details responses
 - Allocation and release must always write an audit record — use a transaction to ensure atomicity
 - `BulkId` on allocations is a `Guid` shared across all IPs in one bulk request; each IP is its own `Allocation` row
-- Tag keys must be unique per allocation; a `PUT` to `/tags` is a full replace (delete all + insert)
+- Tag keys must be unique per allocation; a `PUT` to `/tags` is a full replace (delete all + insert), returns `200 OK` with saved tags
 - RFC1918 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
 - Subnet overlap detection should check new CIDR against all existing subnets in the same scope (same tenancy for private, global for shared)
 - Use `IPNetwork` / `IPAddress` from `System.Net` for all IP arithmetic — no third-party IP libraries needed
+- `IpAllocationService.IpToUint` is a `public static` helper used by `ExclusionService` for range comparisons
 - MySQL provider is Oracle's `MySql.EntityFrameworkCore` (method: `UseMySQL` with capital SQL), not Pomelo. No `ServerVersion` is needed
 - All domain services are registered as scoped; `AuditService` is injected into domain services, not controllers
 - Scalar UI is available at `/scalar` in Development environment only
+- The React SPA is served from `wwwroot/` at runtime. Vite's dev-server proxy rewrites `/api`, `/auth`, and `/dashboard` to the ASP.NET Core backend during development so no CORS configuration is needed

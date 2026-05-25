@@ -3,7 +3,7 @@ name: Release
 # Triggered whenever a version tag (e.g. v1.2.3) is pushed.
 # Produces:
 #   • A GitHub Release with auto-generated notes and self-contained binary
-#     archives for each supported platform.
+#     archives for each supported platform (frontend SPA included).
 #   • A Docker image pushed to GHCR tagged with both the version and "latest".
 on:
   push:
@@ -12,9 +12,7 @@ on:
 
 jobs:
   # ── Job 1: test ──────────────────────────────────────────────────────────────
-  # Run the test suite before publishing anything. Only the SQLite suite runs
-  # here for speed; MySQL and Postgres suites use Testcontainers and are covered
-  # by developer runs locally.
+  # Run both frontend and backend test suites before publishing anything.
   test:
     runs-on: ubuntu-latest
 
@@ -27,12 +25,17 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Restore
+        working-directory: backend
         run: dotnet restore
 
       - name: Build
+        working-directory: backend
         run: dotnet build --no-restore
 
       - name: Test
+        working-directory: backend
+        # Exclude MySQL and Postgres suites — those use Testcontainers and require
+        # a Docker daemon. Only the SQLite suite runs in CI.
         run: dotnet test --no-build --filter "FullyQualifiedName!~MySql&FullyQualifiedName!~Postgres" --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
@@ -40,19 +43,42 @@ jobs:
         if: always()
         with:
           name: test-results
-          path: "**/test-results.trx"
+          path: "backend/**/test-results.trx"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend lint
+        working-directory: frontend
+        run: pnpm lint
+
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: pnpm typecheck
+
+      - name: Frontend test
+        working-directory: frontend
+        run: pnpm test
 
   # ── Job 2: release ───────────────────────────────────────────────────────────
-  # Publishes self-contained single-file binaries for every supported platform,
-  # creates a GitHub Release with those binaries as assets, then builds and
-  # pushes the Docker image to GHCR.
+  # Builds the frontend, then publishes self-contained single-file binaries for
+  # every supported platform with the SPA assets bundled in wwwroot/.
   release:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      # Required to create the GitHub Release and upload release assets.
       contents: write
-      # Required to push the Docker image to GHCR.
       packages: write
 
     strategy:
@@ -72,12 +98,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm build
+
+      # Copy the Vite output into wwwroot so dotnet publish includes it.
+      - name: Copy frontend assets into wwwroot
+        run: cp -r frontend/dist backend/src/wwwroot
+
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
 
       - name: Restore
+        working-directory: backend
         run: dotnet restore
 
       # Publish a self-contained, single-file binary for the matrix RID.
@@ -85,6 +134,7 @@ jobs:
       # executable. Trimming is disabled because ASP.NET Core and EF Core rely
       # heavily on reflection and are not trim-compatible without extra effort.
       - name: Publish (${{ matrix.rid }})
+        working-directory: backend
         run: |
           dotnet publish src/IpamService.csproj \
             -c Release \
@@ -92,7 +142,7 @@ jobs:
             --self-contained true \
             -p:PublishSingleFile=true \
             -p:PublishTrimmed=false \
-            -o publish/${{ matrix.rid }}
+            -o ../publish/${{ matrix.rid }}
 
       # Archive the published output. Use .zip for Windows, .tar.gz for all others.
       - name: Archive (${{ matrix.rid }}, zip)
@@ -107,8 +157,6 @@ jobs:
           tar -czf ipam-${{ github.ref_name }}-${{ matrix.rid }}.tar.gz \
             -C publish/${{ matrix.rid }} .
 
-      # Upload the archive as a workflow artifact so the create-release job
-      # can download all of them in one step.
       - name: Upload archive artifact
         uses: actions/upload-artifact@v4
         with:
@@ -129,7 +177,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Collect all binary archives produced by the matrix job.
       - name: Download all binary artifacts
         uses: actions/download-artifact@v4
         with:
@@ -144,8 +191,6 @@ jobs:
         with:
           generate_release_notes: true
           files: dist/*
-
-      # ── Docker ───────────────────────────────────────────────────────────────
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

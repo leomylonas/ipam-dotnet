@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using IpamService.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -76,6 +77,11 @@ public abstract class IpamControllerBase : ControllerBase
 			// 403 — never reveal why access was denied; return only the status code.
 			return Forbid();
 		}
+		catch (BadValueException ex)
+		{
+			// 400 — malformed value with no field context; surface as plain Problem Details.
+			return Problem(statusCode: StatusCodes.Status400BadRequest, detail: ex.Message);
+		}
 		catch (ConflictException ex)
 		{
 			// 409 — surface the business-rule conflict description as the detail field.
@@ -83,17 +89,28 @@ public abstract class IpamControllerBase : ControllerBase
 		}
 		catch (ValidationException ex)
 		{
-			// 400 — surface the validation failure description as the detail field.
-			return Problem(statusCode: StatusCodes.Status400BadRequest, detail: ex.Message);
+			// 400 — field-level validation failure. MemberNames carries the field name(s)
+			// supplied at the throw site; fall back to the model-level empty key if absent.
+			var message = ex.ValidationResult.ErrorMessage ?? ex.Message;
+			foreach (var member in ex.ValidationResult.MemberNames)
+			{
+				ModelState.AddModelError(member, message);
+			}
+			if (ModelState.Count == 0)
+			{
+				ModelState.AddModelError(string.Empty, message);
+			}
+			return ValidationProblem();
 		}
 		catch (IdentityOperationException ex)
 		{
-			// 400 — surface ASP.NET Identity error descriptions (e.g. password policy
-			// violations) as a structured extension on the Problem response.
-			return Problem(
-				statusCode: StatusCodes.Status400BadRequest,
-				detail: "One or more Identity errors occurred.",
-				extensions: new Dictionary<string, object?> { ["errors"] = ex.Errors });
+			// 400 — each Identity error (e.g. password policy violation) becomes its own
+			// entry under the model-level key, giving the frontend a flat list to display.
+			foreach (var error in ex.Errors)
+			{
+				ModelState.AddModelError(string.Empty, error.Description);
+			}
+			return ValidationProblem();
 		}
 		catch (NoAvailableIpException ex)
 		{

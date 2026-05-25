@@ -96,7 +96,7 @@ public class TenancyService
 		if (!result.Succeeded)
 		{
 			// Surface Identity validation errors so the caller knows what to fix.
-			throw new IdentityOperationException(result.Errors.Select(e => e.Description));
+			throw new IdentityOperationException(result.Errors);
 		}
 
 		// GlobalAdmin actions have no tenancy affiliation — TenancyId is null in the audit entry.
@@ -167,14 +167,19 @@ public class TenancyService
 		// to satisfy FK constraints on databases that enforce them (MySQL, PostgreSQL).
 
 		// AllocationTags reference Allocations — must be deleted first.
+		// Allocations are now scoped to a tenancy by either being on a private subnet of that
+		// tenancy, or being made by a user of that tenancy (for shared subnet allocations).
+		var userIds = users.Select(u => u.Id).ToList();
 		await _db.AllocationTags
 			.Where(t => _db.Allocations
-				.Where(a => a.TenancyId == id)
+				.Where(a => subnets.Contains(a.SubnetId) || (userIds.Count > 0 && userIds.Contains(a.UserId)))
 				.Select(a => a.Id)
 				.Contains(t.AllocationId))
 			.ExecuteDeleteAsync();
 
-		await _db.Allocations.Where(a => a.TenancyId == id).ExecuteDeleteAsync();
+		await _db.Allocations
+			.Where(a => subnets.Contains(a.SubnetId) || (userIds.Count > 0 && userIds.Contains(a.UserId)))
+			.ExecuteDeleteAsync();
 
 		// Guard against an empty subnets list: some providers generate invalid SQL
 		// for an IN clause with zero elements.

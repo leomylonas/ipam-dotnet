@@ -262,9 +262,13 @@ public abstract class ErrorHandlingTestsBase : IAsyncLifetime
 		using var doc = await ReadProblemAsync(response);
 		var root = doc.RootElement;
 		Assert.Equal(400, root.GetProperty("status").GetInt32());
+		// ValidationProblem() shapes errors as an object keyed by field name,
+		// with "" as the model-level key. Verify at least one message is present.
 		Assert.True(root.TryGetProperty("errors", out var errors),
 			"errors extension must be present in IdentityOperationException Problem response");
-		Assert.True(errors.GetArrayLength() > 0, "errors array must contain at least one Identity error description");
+		Assert.True(errors.ValueKind == JsonValueKind.Object, "errors must be an object");
+		Assert.True(errors.TryGetProperty("", out var modelErrors) && modelErrors.GetArrayLength() > 0,
+			"errors[\"\"] must contain at least one Identity error description");
 	}
 
 	// ── Unhandled exception → 500 ─────────────────────────────────────────────

@@ -1,0 +1,29 @@
+.container {
+	width: 100%;
+
+	// Carbon sets overflow-x: auto on this inner wrapper to support wide tables.
+	// Override it with clip so the OverflowMenu button tooltip that appears on hover
+	// does not trigger a spurious horizontal scrollbar.
+	:global(.cds--data-table-content) {
+		overflow-x: clip;
+	}
+}
+
+.emptyCell {
+	color: var(--cds-text-secondary);
+	font-style: italic;
+	padding: 2rem 1rem;
+}
+
+.actionsCell {
+	width: 3rem;
+	text-align: right;
+}
+
+.clickableRow {
+	cursor: pointer;
+
+	&:hover td {
+		background-color: var(--cds-layer-hover);
+	}
+}

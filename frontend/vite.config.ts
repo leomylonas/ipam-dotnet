@@ -10,10 +10,10 @@ export default defineConfig({
 	// auth cookie's SameSite=Strict policy working without CORS configuration.
 	server: {
 		proxy: {
-			'/api': { target: 'http://localhost:5101', changeOrigin: true },
-			'/auth': { target: 'http://localhost:5101', changeOrigin: true },
-			'/dashboard': { target: 'http://localhost:5101', changeOrigin: true },
-			'/health': { target: 'http://localhost:5101', changeOrigin: true },
+			'/api': { target: process.env.VITE_BACKEND_URL ?? 'http://localhost:5101', changeOrigin: true },
+			'/auth': { target: process.env.VITE_BACKEND_URL ?? 'http://localhost:5101', changeOrigin: true },
+			'/dashboard': { target: process.env.VITE_BACKEND_URL ?? 'http://localhost:5101', changeOrigin: true },
+			'/health': { target: process.env.VITE_BACKEND_URL ?? 'http://localhost:5101', changeOrigin: true },
 		},
 	},
 

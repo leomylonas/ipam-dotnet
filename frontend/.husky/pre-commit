@@ -1,4 +1,5 @@
 set -e
+export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node | tail -1)/bin:$PATH"
 cd frontend
 npx lint-staged
 npx tsgo --noEmit

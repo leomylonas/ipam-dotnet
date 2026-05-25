@@ -1,6 +1,10 @@
 **/bin/
 **/obj/
 backend/tests/
+frontend/node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
 .git/
 .github/
 *.md

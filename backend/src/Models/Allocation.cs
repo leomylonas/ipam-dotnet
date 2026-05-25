@@ -20,12 +20,6 @@ public class Allocation
 	/// <summary>Identity ID of the user who requested this allocation.</summary>
 	public string UserId { get; set; } = string.Empty;
 
-	/// <summary>
-	/// The tenancy on whose behalf this IP was allocated. Used to scope
-	/// list queries and access-control checks.
-	/// </summary>
-	public Guid TenancyId { get; set; }
-
 	/// <summary>The subnet from which this IP was drawn.</summary>
 	public Guid SubnetId { get; set; }
 

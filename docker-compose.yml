@@ -1,0 +1,17 @@
+services:
+  ipam:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      Database__Provider: sqlite
+      Database__ConnectionString: Data Source=/data/ipam.db
+      Seed__AdminUsername: admin
+      Seed__AdminPassword: Admin1234!
+      Dashboard__ExhaustionThresholdPercent: 80.0
+      Ui__Enabled: true
+    volumes:
+      - ipam-data:/data
+
+volumes:
+  ipam-data:

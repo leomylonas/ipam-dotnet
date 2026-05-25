@@ -59,8 +59,8 @@ public class TagsController : IpamControllerBase
 	public Task<IActionResult> Replace(Guid id, [FromBody] Dictionary<string, string> tags) =>
 		ExecuteAsync(async () =>
 		{
-			await _tags.ReplaceAsync(id, tags, GetCaller());
-			return NoContent();
+			var result = await _tags.ReplaceAsync(id, tags, GetCaller());
+			return Ok(result);
 		});
 
 	/// <summary>

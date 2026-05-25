@@ -87,7 +87,7 @@ public class SubnetService
 		// Validate the CIDR syntax before doing any further checks.
 		if (!_validation.TryParseCidr(req.Cidr, out _))
 		{
-			throw new ValidationException("Invalid CIDR notation");
+			throw new BadValueException("Invalid CIDR notation.");
 		}
 
 		// Check that the new CIDR does not overlap any existing shared subnet.
@@ -159,6 +159,32 @@ public class SubnetService
 		_db.Subnets.Remove(subnet);
 		_audit.Log(callerId, null, "SubnetDeleted", subnetId: id, notes: $"Cidr={subnet.Cidr}");
 		await _db.SaveChangesAsync();
+	}
+
+	/// <summary>
+	/// Returns the list of tenancies that have been explicitly granted access to
+	/// the specified shared subnet. An empty list means the subnet is open to all
+	/// tenancies (no restrictions set).
+	/// </summary>
+	/// <param name="id">ID of the shared subnet.</param>
+	/// <returns>Tenancy responses for each granted tenancy, in creation order.</returns>
+	/// <exception cref="NotFoundException">Thrown if the subnet does not exist or is not shared.</exception>
+	public async Task<List<TenancyResponse>> ListAccessAsync(Guid id)
+	{
+		// Confirm the subnet exists and is the shared type.
+		if (!await _db.Subnets.AnyAsync(s => s.Id == id && s.Type == SubnetType.Shared))
+		{
+			throw new NotFoundException();
+		}
+
+		// Join the access table to the tenancy table to resolve names in one query.
+		return await _db.SubnetTenancyAccesses
+			.Where(a => a.SubnetId == id)
+			.Join(_db.Tenancies,
+				a => a.TenancyId,
+				t => t.Id,
+				(_, t) => new TenancyResponse(t.Id, t.Name, t.Description, t.CreatedAt))
+			.ToListAsync();
 	}
 
 	/// <summary>
@@ -272,13 +298,13 @@ public class SubnetService
 		// Parse the CIDR first — if invalid, report it before performing further checks.
 		if (!_validation.TryParseCidr(req.Cidr, out var parsedNetwork) || parsedNetwork is null)
 		{
-			throw new ValidationException("Invalid CIDR notation");
+			throw new BadValueException("Invalid CIDR notation.");
 		}
 
 		// Private subnets must reside within one of the RFC1918 ranges.
 		if (!_validation.IsRfc1918(parsedNetwork.Value))
 		{
-			throw new ValidationException("Private subnets must be within RFC1918 ranges");
+			throw new BadValueException("Private subnets must be within RFC1918 ranges.");
 		}
 
 		// Reject CIDRs that overlap existing private subnets in the same tenancy.

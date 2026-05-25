@@ -134,7 +134,7 @@ public class DashboardService
 			sharedUtilisation,
 			exhaustionAlerts,
 			recentAuditDtos.Select(e => new GlobalDashboardAuditEntry(
-				e.Id, e.Timestamp, e.Action, e.PerformedBy, e.TenancyName, e.Detail)).ToList());
+				e.Id, e.Timestamp, e.Action, e.UserId, e.PerformedBy, e.TenancyId, e.TenancyName, e.Detail)).ToList());
 	}
 
 	// ── TenantAdmin ───────────────────────────────────────────────────────────
@@ -270,6 +270,7 @@ public class DashboardService
 			a.Id,
 			a.Timestamp,
 			a.Action,
+			a.UserId,
 			usernameById.GetValueOrDefault(a.UserId, a.UserId),
 			a.Notes)).ToList();
 
@@ -299,8 +300,17 @@ public class DashboardService
 		// ── Recent allocations ────────────────────────────────────────────────
 		// Fetch the most recent 20 allocations for the tenancy and enrich each
 		// with the subnet CIDR and the full tag set.
+		// Scope to allocations on subnets accessible to this tenancy (private subnets
+		// owned by the tenancy, and shared subnets they have access to).
 		var recentAllocations = await _db.Allocations
-			.Where(a => a.TenancyId == tenancyId)
+			.Where(a =>
+				_db.Subnets.Any(s =>
+					s.Id == a.SubnetId &&
+					(
+						(s.Type == SubnetType.Private && s.TenancyId == tenancyId) ||
+						(s.Type == SubnetType.Shared && !_db.SubnetTenancyAccesses.Any(sta => sta.SubnetId == s.Id)) ||
+						(s.Type == SubnetType.Shared && _db.SubnetTenancyAccesses.Any(sta => sta.SubnetId == s.Id && sta.TenancyId == tenancyId))
+					)))
 			.OrderByDescending(a => a.AllocatedAt)
 			.Take(20)
 			.ToListAsync();
@@ -464,14 +474,18 @@ public class DashboardService
 	/// <param name="Id">Audit entry ID.</param>
 	/// <param name="Timestamp">UTC timestamp.</param>
 	/// <param name="Action">Action verb.</param>
+	/// <param name="UserId">Raw user ID.</param>
 	/// <param name="PerformedBy">Resolved username.</param>
+	/// <param name="TenancyId">Raw tenancy ID, or null.</param>
 	/// <param name="TenancyName">Resolved tenancy name, or null.</param>
 	/// <param name="Detail">Notes field.</param>
 	private record ResolvedAuditEntry(
 		Guid Id,
 		DateTime Timestamp,
 		string Action,
+		string UserId,
 		string PerformedBy,
+		Guid? TenancyId,
 		string? TenancyName,
 		string? Detail
 	);
@@ -504,7 +518,9 @@ public class DashboardService
 			a.Id,
 			a.Timestamp,
 			a.Action,
+			a.UserId,
 			usernameById.GetValueOrDefault(a.UserId, a.UserId),
+			a.TenancyId,
 			a.TenancyId.HasValue
 				? tenancyNameById.GetValueOrDefault(a.TenancyId.Value)
 				: null,

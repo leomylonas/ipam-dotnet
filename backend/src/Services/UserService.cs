@@ -119,7 +119,7 @@ public class UserService
 		var result = await _userManager.CreateAsync(user, req.Password);
 		if (!result.Succeeded)
 		{
-			throw new IdentityOperationException(result.Errors.Select(e => e.Description));
+			throw new IdentityOperationException(result.Errors);
 		}
 
 		_audit.Log(caller.UserId, caller.TenancyId, "UserCreated",
@@ -192,7 +192,7 @@ public class UserService
 		var result = await _userManager.UpdateAsync(user);
 		if (!result.Succeeded)
 		{
-			throw new IdentityOperationException(result.Errors.Select(e => e.Description));
+			throw new IdentityOperationException(result.Errors);
 		}
 
 		// If a new password was also supplied, apply it after the profile update.
@@ -259,7 +259,7 @@ public class UserService
 		var result = await _userManager.AddPasswordAsync(user, newPassword);
 		if (!result.Succeeded)
 		{
-			throw new IdentityOperationException(result.Errors.Select(e => e.Description));
+			throw new IdentityOperationException(result.Errors);
 		}
 	}
 }

@@ -94,6 +94,17 @@ public class SharedSubnetsController : IpamControllerBase
 		});
 
 	/// <summary>
+	/// Returns the tenancies that have been explicitly granted access to a shared subnet.
+	/// An empty list indicates no restrictions — all tenancies may allocate.
+	/// </summary>
+	/// <param name="id">ID of the shared subnet.</param>
+	/// <returns><c>200 OK</c> with the list of granted tenancies.</returns>
+	[HttpGet("{id:guid}/access")]
+	[Authorize(Roles = Roles.GlobalAdmin)]
+	public Task<IActionResult> ListAccess(Guid id) =>
+		ExecuteAsync(async () => Ok(await _subnets.ListAccessAsync(id)));
+
+	/// <summary>
 	/// Adds a tenancy-level access restriction to a shared subnet.
 	/// </summary>
 	/// <param name="id">ID of the shared subnet to restrict.</param>

@@ -91,12 +91,21 @@ public class IpAllocationService
 		string? tagKey,
 		string? tagValue)
 	{
-		// Start with all allocations; non-admin callers are scoped to their tenancy.
+		// Start with all allocations; non-admin callers are scoped to subnets they can access.
 		IQueryable<Allocation> query = _db.Allocations;
 
 		if (!caller.IsGlobalAdmin)
 		{
-			query = query.Where(a => a.TenancyId == caller.TenancyId);
+			// Include allocations on private subnets owned by the caller's tenancy, plus
+			// allocations on shared subnets that the caller's tenancy has access to.
+			query = query.Where(a =>
+				_db.Subnets.Any(s =>
+					s.Id == a.SubnetId &&
+					(
+						(s.Type == SubnetType.Private && s.TenancyId == caller.TenancyId) ||
+						(s.Type == SubnetType.Shared && !_db.SubnetTenancyAccesses.Any(sta => sta.SubnetId == s.Id)) ||
+						(s.Type == SubnetType.Shared && _db.SubnetTenancyAccesses.Any(sta => sta.SubnetId == s.Id && sta.TenancyId == caller.TenancyId))
+					)));
 		}
 
 		// Apply optional tag filters. Both key and value are checked together when
@@ -115,7 +124,7 @@ public class IpAllocationService
 		}
 
 		return await query
-			.Select(a => new AllocationResponse(a.Id, a.IpAddress, a.UserId, a.TenancyId,
+			.Select(a => new AllocationResponse(a.Id, a.IpAddress, a.UserId,
 				a.SubnetId, a.Description, a.AllocatedAt, a.BulkId))
 			.ToListAsync();
 	}
@@ -137,8 +146,11 @@ public class IpAllocationService
 
 		if (caller.IsTenantAdmin)
 		{
-			// TenantAdmin can release allocations within their own tenancy.
-			if (allocation.TenancyId != caller.TenancyId)
+			// TenantAdmin can release any allocation whose subnet is accessible to their tenancy.
+			var subnet = await _db.Subnets.FindAsync(allocation.SubnetId)
+				?? throw new NotFoundException("Subnet not found");
+
+			if (!await CanAccessSubnetAsync(subnet, caller))
 			{
 				throw new ForbiddenException();
 			}
@@ -158,9 +170,7 @@ public class IpAllocationService
 		await _db.AllocationTags.Where(t => t.AllocationId == id).ExecuteDeleteAsync();
 		_db.Allocations.Remove(allocation);
 
-		// For GlobalAdmin (no tenancy) fall back to the allocation's own tenancy ID
-		// so the audit entry is correctly scoped for tenant-level audit queries.
-		_audit.Log(caller.UserId, caller.TenancyId ?? allocation.TenancyId,
+		_audit.Log(caller.UserId, caller.TenancyId,
 			"Released", allocation.IpAddress, allocation.SubnetId);
 
 		await _db.SaveChangesAsync();
@@ -190,7 +200,7 @@ public class IpAllocationService
 
 		if (!IPAddress.TryParse(ip, out _))
 		{
-			throw new ValidationException("Invalid IP address");
+			throw new BadValueException("Invalid IP address.");
 		}
 
 		// Check whether the address is currently allocated.
@@ -257,17 +267,17 @@ public class IpAllocationService
 	/// Finds the first available IP in the subnet, writes an <see cref="Allocation"/>
 	/// row and an audit entry, then calls <c>SaveChangesAsync</c> to commit both
 	/// atomically. Network and broadcast addresses are never returned.
+	/// Any authenticated caller (including GlobalAdmin) may invoke this method;
+	/// subnet access must be verified by the caller before invoking.
 	/// </summary>
 	/// <param name="subnet">The subnet to allocate from.</param>
-	/// <param name="userId">Identity ID of the requesting user.</param>
-	/// <param name="tenancyId">Tenancy context for the allocation.</param>
+	/// <param name="caller">The context of the authenticated caller making the allocation.</param>
 	/// <param name="description">Description to store with the allocation.</param>
 	/// <returns>The newly created <see cref="Allocation"/> record.</returns>
 	/// <exception cref="NoAvailableIpException">Thrown when no usable IP exists in the subnet.</exception>
 	public async Task<Allocation> AllocateAsync(
 		Subnet subnet,
-		string userId,
-		Guid tenancyId,
+		CallerContext caller,
 		string description)
 	{
 		// Build the set of IPs that must not be returned — includes exclusion
@@ -285,8 +295,7 @@ public class IpAllocationService
 		{
 			Id = Guid.NewGuid(),
 			IpAddress = ip.ToString(),
-			UserId = userId,
-			TenancyId = tenancyId,
+			UserId = caller.UserId,
 			SubnetId = subnet.Id,
 			Description = description,
 			AllocatedAt = DateTime.UtcNow
@@ -296,7 +305,7 @@ public class IpAllocationService
 		// Stage both the allocation and the audit entry; SaveChangesAsync below
 		// commits them in one transaction so neither can exist without the other.
 		_db.Allocations.Add(allocation);
-		_audit.Log(userId, tenancyId, "Allocated", ip.ToString(), subnet.Id);
+		_audit.Log(caller.UserId, caller.TenancyId, "Allocated", ip.ToString(), subnet.Id);
 
 		await _db.SaveChangesAsync();
 		return allocation;
@@ -308,16 +317,14 @@ public class IpAllocationService
 	/// <c>BulkId</c>) plus an audit entry per IP, then commits everything atomically.
 	/// </summary>
 	/// <param name="subnet">The subnet to allocate from.</param>
-	/// <param name="userId">Identity ID of the requesting user.</param>
-	/// <param name="tenancyId">Tenancy context for the allocations.</param>
+	/// <param name="caller">The context of the authenticated caller making the allocation.</param>
 	/// <param name="description">Description applied to every allocation in the bulk request.</param>
 	/// <param name="count">Number of consecutive IPs required. Must be positive.</param>
 	/// <returns>The list of newly created <see cref="Allocation"/> records, in ascending IP order.</returns>
 	/// <exception cref="NoContiguousBlockException">Thrown when no contiguous block of the requested size exists.</exception>
 	public async Task<List<Allocation>> BulkAllocateAsync(
 		Subnet subnet,
-		string userId,
-		Guid tenancyId,
+		CallerContext caller,
 		string description,
 		int count)
 	{
@@ -342,8 +349,7 @@ public class IpAllocationService
 			{
 				Id = Guid.NewGuid(),
 				IpAddress = ip.ToString(),
-				UserId = userId,
-				TenancyId = tenancyId,
+				UserId = caller.UserId,
 				SubnetId = subnet.Id,
 				Description = description,
 				AllocatedAt = DateTime.UtcNow,
@@ -355,7 +361,7 @@ public class IpAllocationService
 
 			// One audit entry per allocated IP so the audit trail shows every
 			// individual address that was handed out.
-			_audit.Log(userId, tenancyId, "BulkAllocated", ip.ToString(), subnet.Id, $"BulkId={bulkId}");
+			_audit.Log(caller.UserId, caller.TenancyId, "BulkAllocated", ip.ToString(), subnet.Id, $"BulkId={bulkId}");
 		}
 
 		// Commit all allocations and audit entries in one transaction.

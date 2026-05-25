@@ -10,6 +10,17 @@ vi.mock('../Stores/AuthStore', () => ({
 	useAuthStore: mockUseAuthStore,
 }));
 
+// Mock dashboard sub-components to avoid triggering API queries in unit tests.
+vi.mock('../Components/Dashboard/GlobalAdminDashboard', () => ({
+	GlobalAdminDashboard: () => <div data-testid="global-admin-dashboard" />,
+}));
+vi.mock('../Components/Dashboard/TenantAdminDashboard', () => ({
+	TenantAdminDashboard: () => <div data-testid="tenant-admin-dashboard" />,
+}));
+vi.mock('../Components/Dashboard/TenantUserDashboard', () => ({
+	TenantUserDashboard: () => <div data-testid="tenant-user-dashboard" />,
+}));
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function renderAs(user: AuthResponse | null) {
@@ -48,44 +59,38 @@ describe('DashboardPage', () => {
 		expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument();
 	});
 
-	it('displays the signed-in username', () => {
+	it('renders GlobalAdminDashboard for GlobalAdmin role', () => {
 		renderAs(globalAdmin);
-		expect(screen.getByText('admin')).toBeInTheDocument();
+		expect(screen.getByTestId('global-admin-dashboard')).toBeInTheDocument();
+		expect(screen.queryByTestId('tenant-admin-dashboard')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('tenant-user-dashboard')).not.toBeInTheDocument();
 	});
 
-	it('displays the human-readable role label, not the raw role string', () => {
-		renderAs(globalAdmin);
-		// Should show "Global Admin", not "GlobalAdmin".
-		expect(screen.getByText('Global Admin')).toBeInTheDocument();
-		expect(screen.queryByText('GlobalAdmin')).not.toBeInTheDocument();
+	it('renders TenantAdminDashboard for TenantAdmin role', () => {
+		renderAs(tenantAdmin);
+		expect(screen.getByTestId('tenant-admin-dashboard')).toBeInTheDocument();
+		expect(screen.queryByTestId('global-admin-dashboard')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('tenant-user-dashboard')).not.toBeInTheDocument();
 	});
 
-	it('shows correct role labels for all three roles', () => {
+	it('renders TenantUserDashboard for TenantUser role', () => {
+		renderAs(tenantUser);
+		expect(screen.getByTestId('tenant-user-dashboard')).toBeInTheDocument();
+		expect(screen.queryByTestId('global-admin-dashboard')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('tenant-admin-dashboard')).not.toBeInTheDocument();
+	});
+
+	it('renders exactly one dashboard component per role', () => {
 		const cases: [AuthResponse, string][] = [
-			[globalAdmin, 'Global Admin'],
-			[tenantAdmin, 'Tenant Admin'],
-			[tenantUser, 'Tenant User'],
+			[globalAdmin, 'global-admin-dashboard'],
+			[tenantAdmin, 'tenant-admin-dashboard'],
+			[tenantUser, 'tenant-user-dashboard'],
 		];
-		for (const [user, label] of cases) {
+		for (const [user, testId] of cases) {
 			mockUseAuthStore.mockReturnValue({ user });
 			const { unmount } = render(<DashboardPage />);
-			expect(screen.getByText(label)).toBeInTheDocument();
+			expect(screen.getByTestId(testId)).toBeInTheDocument();
 			unmount();
 		}
-	});
-
-	it('hides the tenancy row for GlobalAdmin (tenancyId is null)', () => {
-		renderAs(globalAdmin);
-		expect(screen.queryByText('Tenancy')).not.toBeInTheDocument();
-	});
-
-	it('shows the tenancyId for TenantAdmin', () => {
-		renderAs(tenantAdmin);
-		expect(screen.getByText('a1b2c3d4-0000-0000-0000-000000000001')).toBeInTheDocument();
-	});
-
-	it('shows the tenancyId for TenantUser', () => {
-		renderAs(tenantUser);
-		expect(screen.getByText('a1b2c3d4-0000-0000-0000-000000000001')).toBeInTheDocument();
 	});
 });

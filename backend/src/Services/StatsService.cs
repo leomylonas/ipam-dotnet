@@ -52,7 +52,7 @@ public class StatsService
 		// Parse the stored CIDR to get the network topology for arithmetic.
 		if (!IPNetwork.TryParse(subnet.Cidr, out var network))
 		{
-			throw new ValidationException("Invalid subnet CIDR");
+			throw new BadValueException("Invalid subnet CIDR.");
 		}
 
 		// Convert the base address to uint for arithmetic; derive the broadcast address.

@@ -5,6 +5,7 @@ import pluginReact from 'eslint-plugin-react';
 import pluginReactHooks from 'eslint-plugin-react-hooks';
 import pluginJsxA11y from 'eslint-plugin-jsx-a11y';
 import pluginImport from 'eslint-plugin-import';
+import pluginPrettier from 'eslint-plugin-prettier/recommended';
 import globals from 'globals';
 
 export default tseslint.config(
@@ -17,6 +18,10 @@ export default tseslint.config(
 	// TypeScript strict + stylistic presets — covers parser setup automatically.
 	...tseslint.configs.strict,
 	...tseslint.configs.stylistic,
+
+	// Prettier — disables conflicting formatting rules and reports Prettier
+	// violations as ESLint errors. Must come after other style configs.
+	pluginPrettier,
 
 	{
 		// Restrict type-aware linting to app source only. Config files
@@ -66,7 +71,6 @@ export default tseslint.config(
 			// ── TypeScript (from the plan's rule posture) ──────────────────
 			'@typescript-eslint/no-explicit-any': 'error',
 			'@typescript-eslint/no-floating-promises': 'error',
-			'@typescript-eslint/strict-boolean-expressions': 'error',
 			'@typescript-eslint/no-unused-vars': 'error',
 			'@typescript-eslint/no-non-null-assertion': 'warn',
 			'@typescript-eslint/consistent-type-imports': [

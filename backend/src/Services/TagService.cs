@@ -64,7 +64,7 @@ public class TagService
 	/// <param name="caller">The context of the authenticated caller.</param>
 	/// <exception cref="ForbiddenException">Thrown if the caller cannot access this allocation.</exception>
 	/// <exception cref="NotFoundException">Thrown if the allocation does not exist.</exception>
-	public async Task ReplaceAsync(Guid allocationId, Dictionary<string, string> tags, CallerContext caller)
+	public async Task<List<TagResponse>> ReplaceAsync(Guid allocationId, Dictionary<string, string> tags, CallerContext caller)
 	{
 		await GetAuthorizedAllocationAsync(allocationId, caller);
 
@@ -85,6 +85,12 @@ public class TagService
 		}
 
 		await _db.SaveChangesAsync();
+
+		// Return the saved tags so the caller can update its state without a follow-up GET.
+		return await _db.AllocationTags
+			.Where(t => t.AllocationId == allocationId)
+			.Select(t => new TagResponse(t.Id, t.Key, t.Value))
+			.ToListAsync();
 	}
 
 	/// <summary>
@@ -131,8 +137,16 @@ public class TagService
 			return allocation;
 		}
 
-		// Tenant roles may only access allocations belonging to their own tenancy.
-		if (allocation.TenancyId != caller.TenancyId)
+		// Tenant roles may only access allocations on subnets they can access.
+		var subnet = await _db.Subnets.FindAsync(allocation.SubnetId)
+			?? throw new NotFoundException("Subnet not found");
+
+		var hasAccess =
+			(subnet.Type == SubnetType.Private && subnet.TenancyId == caller.TenancyId) ||
+			(subnet.Type == SubnetType.Shared && !await _db.SubnetTenancyAccesses.AnyAsync(sta => sta.SubnetId == subnet.Id)) ||
+			(subnet.Type == SubnetType.Shared && await _db.SubnetTenancyAccesses.AnyAsync(sta => sta.SubnetId == subnet.Id && sta.TenancyId == caller.TenancyId));
+
+		if (!hasAccess)
 		{
 			throw new ForbiddenException();
 		}

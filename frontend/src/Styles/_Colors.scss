@@ -1,0 +1,50 @@
+// ── Support colours ────────────────────────────────────────────────────────────
+// Semantic status colours. Also work on SVG icons that use currentColor.
+
+.success {
+	color: var(--cds-support-success);
+}
+
+.warning {
+	color: var(--cds-support-warning);
+}
+
+.error {
+	color: var(--cds-support-error);
+}
+
+.info {
+	color: var(--cds-support-info);
+}
+
+.caution-major {
+	color: var(--cds-support-caution-major);
+}
+
+.caution-minor {
+	color: var(--cds-support-caution-minor);
+}
+
+.caution-unknown {
+	color: var(--cds-support-caution-undefined);
+}
+
+// ── Support inverse colours ────────────────────────────────────────────────────
+// Lighter tones — use on dark/coloured backgrounds where the base colour has
+// insufficient contrast.
+
+.success-inverse {
+	color: var(--cds-support-success-inverse);
+}
+
+.warning-inverse {
+	color: var(--cds-support-warning-inverse);
+}
+
+.error-inverse {
+	color: var(--cds-support-error-inverse);
+}
+
+.info-inverse {
+	color: var(--cds-support-info-inverse);
+}

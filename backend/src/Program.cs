@@ -37,25 +37,30 @@ builder.Host.UseSerilog((ctx, cfg) =>
 var provider = config["Database:Provider"];
 var connStr = config["Database:ConnectionString"];
 
+if (string.IsNullOrEmpty(provider))
+{
+	throw new InvalidOperationException("Database provider not configured. Set Database:Provider to 'sqlite', 'mysql', or 'postgres'.");
+}
+
 switch (provider)
 {
 	case "sqlite":
 		builder.Services.AddDbContext<AppDbContext, SqliteAppDbContext>(options =>
-			options.UseSqlite(connStr, x => x.MigrationsAssembly("IpamService")));
+			options.UseSqlite(connStr!, x => x.MigrationsAssembly("IpamService")));
 		break;
 
 	case "mysql":
 		// Oracle MySQL provider — UseMySQL (capital SQL) is the Oracle API,
 		// distinct from Pomelo's UseMySql. No ServerVersion needed.
 		builder.Services.AddDbContext<AppDbContext, MySqlAppDbContext>(options =>
-			options.UseMySQL(connStr,
+			options.UseMySQL(connStr!,
 				x => x.MigrationsAssembly("IpamService")));
 		break;
 
 	case "postgres":
 		// Npgsql provider for PostgreSQL and compatible databases.
 		builder.Services.AddDbContext<AppDbContext, PostgresAppDbContext>(options =>
-			options.UseNpgsql(connStr,
+			options.UseNpgsql(connStr!,
 				x => x.MigrationsAssembly("IpamService")));
 		break;
 
@@ -348,7 +353,7 @@ using (var scope = app.Services.CreateScope())
 		{
 			// Fail fast so a misconfigured seed password surfaces immediately
 			// rather than leaving the application in a state with no admin user.
-			var errors = string.Join(", ", createResult.Errors.Select(e => e.Description));
+			var errors = string.Join(", ", createResult.Errors);
 			throw new InvalidOperationException($"Failed to seed GlobalAdmin user: {errors}");
 		}
 	}

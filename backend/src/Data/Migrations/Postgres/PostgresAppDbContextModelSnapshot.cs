@@ -45,9 +45,6 @@ namespace IpamService.Data.Migrations.Postgres
                     b.Property<Guid>("SubnetId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid>("TenancyId")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("UserId")
                         .IsRequired()
                         .HasColumnType("text");

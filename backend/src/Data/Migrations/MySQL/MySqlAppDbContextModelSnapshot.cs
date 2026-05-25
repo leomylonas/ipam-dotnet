@@ -42,9 +42,6 @@ namespace IpamService.Data.Migrations.MySQL
                     b.Property<Guid>("SubnetId")
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid>("TenancyId")
-                        .HasColumnType("char(36)");
-
                     b.Property<string>("UserId")
                         .IsRequired()
                         .HasColumnType("longtext");

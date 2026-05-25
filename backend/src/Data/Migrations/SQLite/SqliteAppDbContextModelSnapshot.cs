@@ -40,9 +40,6 @@ namespace IpamService.Data.Migrations.SQLite
                     b.Property<Guid>("SubnetId")
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid>("TenancyId")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("UserId")
                         .IsRequired()
                         .HasColumnType("TEXT");

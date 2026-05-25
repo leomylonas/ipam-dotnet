@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Identity;
+
 namespace IpamService.Services;
 
 /// <summary>
@@ -44,17 +46,19 @@ public class ConflictException : Exception
 }
 
 /// <summary>
-/// Thrown by a service method when the caller supplied invalid input —
-/// for example, an unparseable CIDR or an invalid IP address.
-/// Controllers catch this and return HTTP 400 Bad Request with the message as the body.
+/// Thrown by a service method when a supplied value is malformed or cannot be
+/// interpreted — for example, an invalid CIDR string or an IP address that fails
+/// parsing. Unlike <see cref="System.ComponentModel.DataAnnotations.ValidationException"/>,
+/// this is not tied to a named request field. Controllers catch this and return
+/// HTTP 400 Bad Request with the message as the <c>detail</c> of a Problem Details response.
 /// </summary>
-public class ValidationException : Exception
+public class BadValueException : Exception
 {
 	/// <summary>
-	/// Initialises a new instance of <see cref="ValidationException"/>.
+	/// Initialises a new instance of <see cref="BadValueException"/>.
 	/// </summary>
-	/// <param name="message">Human-readable description of the validation failure.</param>
-	public ValidationException(string message) : base(message) { }
+	/// <param name="message">Human-readable description of the bad value.</param>
+	public BadValueException(string message) : base(message) { }
 }
 
 /// <summary>
@@ -67,18 +71,18 @@ public class ValidationException : Exception
 public class IdentityOperationException : Exception
 {
 	/// <summary>
-	/// The Identity error description strings to surface to the API caller.
-	/// Each string corresponds to one <c>IdentityError.Description</c> from
+	/// The Identity errors to surface to the API caller.
+	/// Each corresponds to one <c>IdentityError</c> from
 	/// the failed Identity operation.
 	/// </summary>
-	public IEnumerable<string> Errors { get; }
+	public IEnumerable<IdentityError> Errors { get; }
 
 	/// <summary>
 	/// Initialises a new instance of <see cref="IdentityOperationException"/>.
 	/// </summary>
 	/// <param name="errors">The Identity error descriptions from the failed operation.</param>
-	public IdentityOperationException(IEnumerable<string> errors)
-		: base(string.Join("; ", errors))
+	public IdentityOperationException(IEnumerable<IdentityError> errors)
+		: base(string.Join("; ", errors.Select(e => e.Description)))
 	{
 		Errors = errors;
 	}

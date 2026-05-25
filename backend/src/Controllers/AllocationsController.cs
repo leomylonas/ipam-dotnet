@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using IpamService.Models;
 using IpamService.Models.DTOs;
 using IpamService.Services;
@@ -56,14 +57,11 @@ public class AllocationsController : IpamControllerBase
 	/// <c>409 Conflict</c> if no IP addresses are available.
 	/// </returns>
 	[HttpPost("api/allocations")]
-	[Authorize(Roles = Roles.TenantMembers)]
 	public Task<IActionResult> Allocate([FromBody] AllocateRequest req) =>
 		ExecuteAsync(async () =>
 		{
 			var caller = GetCaller();
 
-			// Load the subnet first so we can check access before running the allocator.
-			// The subnet is re-used by AllocateAsync via BuildExcludedSetAsync internally.
 			var subnet = await _allocator.LoadSubnetOrThrowAsync(req.SubnetId);
 
 			if (!await _allocator.CanAccessSubnetAsync(subnet, caller))
@@ -71,18 +69,11 @@ public class AllocationsController : IpamControllerBase
 				throw new ForbiddenException();
 			}
 
-			// CallerTenancyId is guaranteed non-null here because TenantAdmin and
-			// TenantUser always have a tenancy affiliation (enforced by the role attribute).
-			if (!caller.TenancyId.HasValue)
-			{
-				throw new ForbiddenException();
-			}
-
-			var allocation = await _allocator.AllocateAsync(subnet, caller.UserId, caller.TenancyId.Value, req.Description);
+			var allocation = await _allocator.AllocateAsync(subnet, caller, req.Description);
 
 			return CreatedAtAction(nameof(List),
 				new AllocationResponse(allocation.Id, allocation.IpAddress, allocation.UserId,
-					allocation.TenancyId, allocation.SubnetId, allocation.Description,
+					allocation.SubnetId, allocation.Description,
 					allocation.AllocatedAt, allocation.BulkId));
 		});
 
@@ -99,7 +90,6 @@ public class AllocationsController : IpamControllerBase
 	/// <c>409 Conflict</c> if no contiguous block of the requested size exists.
 	/// </returns>
 	[HttpPost("api/allocations/bulk")]
-	[Authorize(Roles = Roles.TenantMembers)]
 	public Task<IActionResult> BulkAllocate([FromBody] BulkAllocateRequest req) =>
 		ExecuteAsync(async () =>
 		{
@@ -112,20 +102,15 @@ public class AllocationsController : IpamControllerBase
 				throw new ForbiddenException();
 			}
 
-			if (!caller.TenancyId.HasValue)
-			{
-				throw new ForbiddenException();
-			}
-
 			if (req.Count <= 0)
 			{
-				throw new ValidationException("Count must be positive");
+				throw new ValidationException(new ValidationResult("Count must be positive.", ["count"]), null, req.Count);
 			}
 
-			var allocations = await _allocator.BulkAllocateAsync(subnet, caller.UserId, caller.TenancyId.Value, req.Description, req.Count);
+			var allocations = await _allocator.BulkAllocateAsync(subnet, caller, req.Description, req.Count);
 
 			var responses = allocations.Select(a =>
-				new AllocationResponse(a.Id, a.IpAddress, a.UserId, a.TenancyId,
+				new AllocationResponse(a.Id, a.IpAddress, a.UserId,
 					a.SubnetId, a.Description, a.AllocatedAt, a.BulkId));
 
 			return CreatedAtAction(nameof(List), responses);

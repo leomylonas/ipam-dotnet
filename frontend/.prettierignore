@@ -1,0 +1,9 @@
+# Package manager files
+package.json
+pnpm-lock.yaml
+
+# Build output
+dist/
+
+# Generated type declarations
+*.d.ts

@@ -210,6 +210,93 @@ public abstract class AllocationsControllerTestsBase : IAsyncLifetime
 		var response = await client.PostAsJsonAsync("/api/allocations", req);
 		Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
 	}
+
+	/// <summary>
+	/// Verifies that a GlobalAdmin can allocate an IP from any private subnet regardless
+	/// of which tenancy owns the subnet. TenancyId is no longer stored on Allocation —
+	/// it is derived from the subnet — so GlobalAdmin allocations must still succeed.
+	/// </summary>
+	[Fact]
+	public async Task GlobalAdmin_CanAllocateFromPrivateSubnet()
+	{
+		// The admin client allocates from the tenancy-owned subnet seeded in InitializeAsync.
+		var req = new AllocateRequest(_subnetId, "admin allocation");
+		var response = await _adminClient.PostAsJsonAsync("/api/allocations", req);
+		Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+		var allocation = await response.Content.ReadFromJsonAsync<AllocationResponse>();
+		Assert.NotNull(allocation);
+		Assert.Equal("10.0.0.1", allocation.IpAddress);
+
+		// Confirm the allocation is visible to GlobalAdmin in the list.
+		var listResponse = await _adminClient.GetAsync("/api/allocations");
+		var allocations = await listResponse.Content.ReadFromJsonAsync<List<AllocationResponse>>();
+		Assert.Contains(allocations!, a => a.Id == allocation.Id);
+	}
+
+	/// <summary>
+	/// Verifies that GlobalAdmin allocations appear in the full list returned to GlobalAdmin,
+	/// and that no TenancyId field is present in the response (the model no longer has it).
+	/// </summary>
+	[Fact]
+	public async Task GlobalAdmin_AllocationsListContainsAllEntries()
+	{
+		// Allocate once as TenantUser.
+		await _tenantUserClient.PostAsJsonAsync("/api/allocations", new AllocateRequest(_subnetId, "user alloc"));
+
+		// Allocate once as GlobalAdmin.
+		await _adminClient.PostAsJsonAsync("/api/allocations", new AllocateRequest(_subnetId, "admin alloc"));
+
+		// GlobalAdmin list must contain both.
+		var listResponse = await _adminClient.GetAsync("/api/allocations");
+		Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
+
+		var allocations = await listResponse.Content.ReadFromJsonAsync<List<AllocationResponse>>();
+		Assert.NotNull(allocations);
+		Assert.Equal(2, allocations!.Count);
+	}
+
+	/// <summary>
+	/// Verifies that a TenantUser only sees allocations within their own tenancy's subnets.
+	/// A GlobalAdmin allocation from the same subnet is still visible to the TenantUser
+	/// because it is scoped to that subnet (which belongs to the user's tenancy).
+	/// </summary>
+	[Fact]
+	public async Task TenantUser_CanSeeAllocationsOnOwnSubnet()
+	{
+		// Allocate as GlobalAdmin from the tenancy-owned subnet.
+		await _adminClient.PostAsJsonAsync("/api/allocations", new AllocateRequest(_subnetId, "admin alloc on tenant subnet"));
+
+		// Allocate as TenantUser.
+		await _tenantUserClient.PostAsJsonAsync("/api/allocations", new AllocateRequest(_subnetId, "user alloc"));
+
+		// TenantUser list should contain both, since both are on their accessible subnet.
+		var listResponse = await _tenantUserClient.GetAsync("/api/allocations");
+		var allocations = await listResponse.Content.ReadFromJsonAsync<List<AllocationResponse>>();
+		Assert.NotNull(allocations);
+		Assert.Equal(2, allocations!.Count);
+	}
+
+	/// <summary>
+	/// Verifies that releasing an allocation created by GlobalAdmin works correctly
+	/// when the admin calls DELETE on that allocation.
+	/// </summary>
+	[Fact]
+	public async Task GlobalAdmin_CanReleaseOwnAllocation()
+	{
+		// Allocate as GlobalAdmin.
+		var createResp = await _adminClient.PostAsJsonAsync("/api/allocations", new AllocateRequest(_subnetId, "to release"));
+		var allocation = await createResp.Content.ReadFromJsonAsync<AllocationResponse>();
+
+		// Release it.
+		var deleteResp = await _adminClient.DeleteAsync($"/api/allocations/{allocation!.Id}");
+		Assert.Equal(HttpStatusCode.NoContent, deleteResp.StatusCode);
+
+		// Confirm it is gone.
+		var listResp = await _adminClient.GetAsync("/api/allocations");
+		var allocations = await listResp.Content.ReadFromJsonAsync<List<AllocationResponse>>();
+		Assert.DoesNotContain(allocations!, a => a.Id == allocation.Id);
+	}
 }
 
 /// <summary>
