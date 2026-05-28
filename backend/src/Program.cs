@@ -4,6 +4,8 @@ using IpamService.Data;
 using IpamService.Models;
 using IpamService.Services;
 using Microsoft.AspNetCore.Authentication;
+using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
@@ -204,6 +206,7 @@ builder.Services.AddScoped<DashboardService>();
 builder.Services.Configure<SeedOptions>(config.GetSection("Seed"));
 builder.Services.Configure<DashboardOptions>(config.GetSection("Dashboard"));
 builder.Services.Configure<UiOptions>(config.GetSection("Ui"));
+builder.Services.Configure<ProxyOptions>(config.GetSection("Proxy"));
 
 // ── Web API infrastructure ────────────────────────────────────────────────────
 builder.Services.AddControllers();
@@ -219,6 +222,87 @@ builder.Services.AddOpenApi();
 var app = builder.Build();
 
 // ── Middleware pipeline ───────────────────────────────────────────────────────
+
+// ── Forwarded headers ─────────────────────────────────────────────────────────
+// When the app runs behind a reverse proxy (nginx, Caddy, a cloud load balancer,
+// etc.), the proxy terminates TLS and forwards the original request details in
+// X-Forwarded-For (client IP) and X-Forwarded-Proto (https) headers.
+// UseForwardedHeaders must be the first middleware in the pipeline so that every
+// subsequent middleware — including authentication, cookie validation, and the
+// exception handler — sees the correct scheme and remote IP rather than the
+// proxy's address.
+//
+// Behaviour is driven by the Proxy config section (env vars: Proxy__Enabled,
+// Proxy__TrustAllProxies). See ProxyOptions for full documentation.
+var proxyConfig = config.GetSection("Proxy").Get<ProxyOptions>() ?? new ProxyOptions();
+
+if (proxyConfig.Enabled)
+{
+	var fwdOptions = new ForwardedHeadersOptions
+	{
+		// Forward both the originating client IP and the original protocol (http/https).
+		// X-Forwarded-Proto is what makes CookieSecurePolicy.SameAsRequest behave
+		// correctly when TLS is terminated at the proxy rather than at Kestrel.
+		ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+	};
+
+	if (proxyConfig.TrustAllProxies)
+	{
+		// Accept forwarded headers from any source address. Only use this in
+		// fully trusted networks (e.g. a private Kubernetes cluster) where the
+		// ingress/proxy IP cannot be known in advance and the network boundary
+		// itself is the security perimeter.
+		fwdOptions.KnownIPNetworks.Clear();
+		fwdOptions.KnownProxies.Clear();
+	}
+	else if (proxyConfig.TrustedProxies.Count > 0)
+	{
+		// Parse each entry in Proxy:TrustedProxies and add it to the appropriate
+		// collection. CIDR notation (e.g. "10.0.0.0/8") → KnownIPNetworks;
+		// plain IP (e.g. "10.0.0.1") → KnownProxies.
+		// Entries are appended on top of the built-in loopback trust.
+		foreach (var entry in proxyConfig.TrustedProxies)
+		{
+			var trimmed = entry.Trim();
+
+			if (trimmed.Contains('/'))
+			{
+				// CIDR range — parse as a network block.
+				if (System.Net.IPNetwork.TryParse(trimmed, out var network))
+				{
+					fwdOptions.KnownIPNetworks.Add(network);
+				}
+				else
+				{
+					app.Logger.LogWarning(
+						"Proxy:TrustedProxies entry '{Entry}' is not a valid CIDR range and will be ignored.",
+						trimmed);
+				}
+			}
+			else
+			{
+				// Single IP address.
+				if (IPAddress.TryParse(trimmed, out var ip))
+				{
+					fwdOptions.KnownProxies.Add(ip);
+				}
+				else
+				{
+					app.Logger.LogWarning(
+						"Proxy:TrustedProxies entry '{Entry}' is not a valid IP address and will be ignored.",
+						trimmed);
+				}
+			}
+		}
+	}
+	// When neither TrustAllProxies nor TrustedProxies is configured, the
+	// built-in KnownIPNetworks list already contains loopback addresses
+	// (127.0.0.1 / ::1), covering local dev and Docker Compose setups where
+	// the proxy connects via loopback.
+
+	app.UseForwardedHeaders(fwdOptions);
+}
+
 // Only expose the OpenAPI document and the interactive Scalar UI in Development.
 // This prevents accidental exposure in production where the schema could reveal
 // internal API surface.
@@ -353,7 +437,7 @@ using (var scope = app.Services.CreateScope())
 		{
 			// Fail fast so a misconfigured seed password surfaces immediately
 			// rather than leaving the application in a state with no admin user.
-			var errors = string.Join(", ", createResult.Errors);
+			var errors = string.Join(", ", createResult.Errors.Select(e => e.Description));
 			throw new InvalidOperationException($"Failed to seed GlobalAdmin user: {errors}");
 		}
 	}

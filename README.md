@@ -17,6 +17,7 @@ It supports multiple isolated tenancies, each with their own private subnets and
 - [Role and Access Model](#role-and-access-model)
 - [Configuration](#configuration)
 - [Logging](#logging)
+- [TLS / HTTPS](#tls--https)
 - [Getting Started](#getting-started)
 - [Running Tests](#running-tests)
 - [Migrations](#migrations)
@@ -106,6 +107,9 @@ Configuration is file-driven via `appsettings*.json`.
 | `Seed:AdminPassword`                   | `string` | Yes      | —             | GlobalAdmin bootstrap password (must satisfy Identity policy)                  |
 | `Dashboard:ExhaustionThresholdPercent` | `double` | No       | `80.0`        | Utilisation % at or above which a subnet appears in exhaustion alerts          |
 | `Ui:Enabled`                           | `bool`   | No       | `true`        | When `true`, serves the React SPA from `wwwroot/`; when `false`, API-only mode |
+| `Proxy:Enabled`                        | `bool`   | No       | `true`        | Whether to process `X-Forwarded-For` / `X-Forwarded-Proto` headers. Set to `false` for direct internet-facing deployments with no reverse proxy |
+| `Proxy:TrustedProxies`                 | `string[]` | No     | `[]`          | Explicit list of trusted proxy IPs or CIDR ranges. Entries are added on top of loopback trust. See below. |
+| `Proxy:TrustAllProxies`                | `bool`   | No       | `false`       | When `true`, clears `KnownIPNetworks` and `KnownProxies` so forwarded headers are accepted from any source. Overrides `TrustedProxies`. Use only in fully trusted network environments |
 | `Serilog:MinimumLevel:Default`         | `string` | No       | `Information` | Default minimum log level                                                      |
 
 ### Identity Password Policy
@@ -130,6 +134,76 @@ Use environment variables with `__` as the section separator:
 Serilog__MinimumLevel__Default=Debug
 Serilog__MinimumLevel__Override__Microsoft.EntityFrameworkCore=Fatal
 ```
+
+## TLS / HTTPS
+
+Kestrel reads its full configuration from environment variables — no code changes are needed to enable HTTPS.
+
+### Listening address
+
+```bash
+# HTTPS only
+ASPNETCORE_URLS=https://+:8443
+
+# HTTPS + HTTP together
+ASPNETCORE_URLS=https://+:8443;http://+:8080
+```
+
+### Certificate — PFX (PKCS#12)
+
+```bash
+ASPNETCORE_Kestrel__Certificates__Default__Path=/certs/server.pfx
+ASPNETCORE_Kestrel__Certificates__Default__Password=yourpassword
+```
+
+### Certificate — PEM (separate cert and key files)
+
+```bash
+ASPNETCORE_Kestrel__Certificates__Default__Path=/certs/server.crt
+ASPNETCORE_Kestrel__Certificates__Default__KeyPath=/certs/server.key
+```
+
+The key file must be unencrypted (no passphrase).
+
+### Docker
+
+Expose the HTTPS port and mount the certificate directory:
+
+```bash
+docker run --rm -p 8443:8443 \
+  -v /path/to/certs:/certs:ro \
+  -e ASPNETCORE_URLS="https://+:8443" \
+  -e ASPNETCORE_Kestrel__Certificates__Default__Path=/certs/server.pfx \
+  -e ASPNETCORE_Kestrel__Certificates__Default__Password=yourpassword \
+  -e Database__Provider=sqlite \
+  -e Database__ConnectionString='Data Source=/data/ipam.db' \
+  -e Seed__AdminUsername=admin \
+  -e Seed__AdminPassword='Admin1234!' \
+  ipam-service
+```
+
+### Reverse proxy
+
+If TLS is terminated upstream (nginx, Caddy, etc.) rather than at Kestrel, ensure the proxy passes `X-Forwarded-For` and `X-Forwarded-Proto: https`. `UseForwardedHeaders` is already registered as the first middleware and reads both headers automatically, so the session cookie's `Secure` flag and remote IP resolution work correctly through the proxy.
+
+Three environment variables control the forwarded-headers behaviour:
+
+```bash
+# Disable entirely for direct internet-facing deployments (no proxy)
+Proxy__Enabled=false
+
+# Trust specific IPs or CIDR ranges (added on top of loopback trust)
+Proxy__TrustedProxies__0=10.0.0.1
+Proxy__TrustedProxies__1=172.16.0.0/12
+
+# Trust forwarded headers from any source IP (for dynamic-IP ingress / Kubernetes)
+# Takes precedence over TrustedProxies
+Proxy__TrustAllProxies=true
+```
+
+By default (`Proxy__Enabled=true`, empty `TrustedProxies`, `TrustAllProxies=false`), only loopback addresses (`127.0.0.1`, `::1`) are trusted as proxy sources — sufficient for local development and Docker Compose setups where the proxy connects via loopback.
+
+Each entry in `TrustedProxies` can be either a plain IP address (`10.0.0.1`) or a CIDR range (`172.16.0.0/12`). Invalid entries are logged as warnings at startup and skipped.
 
 ## Getting Started
 

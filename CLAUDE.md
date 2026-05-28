@@ -63,6 +63,8 @@ A generic, multi-tenant IP Address Management (IPAM) system with a .NET 10 REST 
 | State | `react-granular-store` (auth store only) |
 | CSS | CSS Modules + Sass |
 | Package manager | pnpm |
+| Linter | ESLint 9 (flat config `eslint.config.ts`) |
+| Git hooks | `husky` + `lint-staged` |
 | Tests | Vitest + Testing Library (unit/component), Playwright (E2E) |
 
 ---
@@ -79,6 +81,9 @@ All configuration is file-driven. No runtime admin UI for config.
 | `Seed:AdminPassword` | `string` | Password for the bootstrapped GlobalAdmin user |
 | `Dashboard:ExhaustionThresholdPercent` | `double` | Utilisation % at or above which a subnet appears in exhaustion alerts. Default `80.0` |
 | `Ui:Enabled` | `bool` | When `true` (default), serves the React SPA from `wwwroot/` and falls back to `index.html`. When `false`, API-only mode. |
+| `Proxy:Enabled` | `bool` | When `true` (default), registers `UseForwardedHeaders` to process `X-Forwarded-For` / `X-Forwarded-Proto`. Set to `false` for direct internet-facing deployments. |
+| `Proxy:TrustedProxies` | `string[]` | Explicit list of trusted proxy IPs or CIDR ranges appended on top of loopback trust (e.g. `["10.0.0.1", "172.16.0.0/12"]`). Env var: `Proxy__TrustedProxies__0=10.0.0.1`. Invalid entries are logged and skipped. |
+| `Proxy:TrustAllProxies` | `bool` | When `true`, clears `KnownIPNetworks` and `KnownProxies` so forwarded headers are accepted from any source IP. Overrides `TrustedProxies`. Default `false` (loopback only). |
 
 On startup, if the GlobalAdmin user does not exist, it is created automatically from seed config.
 
@@ -688,6 +693,25 @@ Role-based route restrictions:
 - `/users`, `/subnets`, `/subnets/$subnetId`, `/audit` — GlobalAdmin + TenantAdmin (TenantUser redirected to `/`)
 - `/` (dashboard), `/allocations` — all authenticated roles
 
+### Theme
+
+- Defaults to the user's OS `prefers-color-scheme` (light → Carbon White; dark → Carbon g100).
+- A manual toggle in the header overrides the OS preference and persists the choice to `localStorage`.
+- Implemented in `ThemeProvider.tsx`; the toggle button lives in `ThemeSwitcher.tsx`.
+
+### Page Functionality by Role
+
+| Page | GlobalAdmin | TenantAdmin | TenantUser |
+|---|---|---|---|
+| Dashboard | System-wide stats + exhaustion alerts + recent audit | Tenancy stats + exhaustion alerts + recent audit | Accessible subnets + recent accessible allocations |
+| Tenancies | List, create, update name, delete | — | — |
+| Users | List, create, update (username, role, password), delete (all tenancies) | List, create, update (username, role, password), delete (own tenancy) | — |
+| Shared Subnets | List, create, update (name, description, per-tenancy access), delete | — | — |
+| Subnets | List, create, update (name, description), delete | List, create, update (name, description), delete | — |
+| Subnet Detail | Stats, exclusion ranges (list, add, edit description, delete), allocations (list, allocate, bulk allocate, filter by tag, release) | Stats, exclusion ranges (list, add, edit description, delete), allocations (list, allocate, bulk allocate, filter by tag, release) | — |
+| Allocations | — | Allocate single, bulk allocate, release, manage tags (full replace), filter by tag | Allocate single, bulk allocate, release, manage own tags (full replace), filter by tag |
+| Audit Log | Full system log | Scoped to own tenancy | — |
+
 ### Component organization
 Components are organized by resource domain under `Components/`. Each resource directory contains its smart list/section component(s) and all related modals. Pages are thin orchestrators that import these smart components and pass minimal props.
 
@@ -739,6 +763,46 @@ Each `use*.ts` exports individual named hooks plus a composite `useFoo()` return
 
 ### Vite dev proxy
 `vite.config.ts` proxies `/api`, `/auth`, `/dashboard`, and `/health` to the backend. The target is read from `process.env.VITE_BACKEND_URL` (fallback `http://localhost:5101`). E2E tests set this env var to `http://localhost:5201` via the Playwright `webServer` config so E2E requests hit the dedicated test backend rather than a running dev instance.
+
+### ESLint Configuration
+
+Configured in `eslint.config.ts` using the ESLint 9 flat-config format.
+
+**Plugins:**
+
+| Plugin | Purpose |
+|---|---|
+| `typescript-eslint` | Strict TypeScript rules |
+| `eslint-plugin-react` | React-specific rules |
+| `eslint-plugin-react-hooks` | Hooks rules |
+| `eslint-plugin-jsx-a11y` | Accessibility |
+| `eslint-plugin-import` | Import ordering + no unresolved |
+
+**Rule posture** — base presets: `typescript-eslint/strict` + `typescript-eslint/stylistic`
+
+| Rule | Level |
+|---|---|
+| `no-explicit-any` | error |
+| `no-floating-promises` | error |
+| `strict-boolean-expressions` | error |
+| `no-unused-vars` | error |
+| `react-hooks/exhaustive-deps` | error |
+| `jsx-a11y` recommended | error |
+| `no-non-null-assertion` | warn |
+| `consistent-type-imports` | error (auto-fixable) |
+
+### Pre-commit Hooks
+
+Managed by `husky` (initialised via the `prepare` script) and `lint-staged`. The `packageManager` field in `package.json` is pinned to enforce `pnpm`.
+
+| Step | Command | Scope |
+|---|---|---|
+| Lint | `eslint` (no `--fix`) | Staged `.ts` / `.tsx` files only |
+| Type check | `tsgo --noEmit` | Whole project |
+
+- No auto-fixing — the hook surfaces issues; the developer resolves them manually.
+- Prettier is installed as a formatter but is **not** run in the pre-commit hook.
+- `typescript-go` (`tsgo`) is used for type checking only; the Vite build pipeline continues to use `tsc`.
 
 ### Known gotchas
 - **TanStack Router `from` paths:** Do not add `from` to `useNavigate` or `Link` unless the route is in the same tree — it causes type errors.
