@@ -51,6 +51,14 @@ public class IpAllocationService
 	private readonly AuditService _audit;
 
 	/// <summary>
+	/// Maximum number of times <see cref="AllocateAsync"/> and
+	/// <see cref="BulkAllocateAsync"/> will retry after a concurrent unique-constraint
+	/// violation. Ten attempts is well above any realistic burst of simultaneous
+	/// requests to the same subnet.
+	/// </summary>
+	private const int MaxAllocationAttempts = 10;
+
+	/// <summary>
 	/// Initialises a new instance of <see cref="IpAllocationService"/>.
 	/// </summary>
 	/// <param name="db">The EF Core context, injected by the DI container.</param>
@@ -269,82 +277,40 @@ public class IpAllocationService
 	/// atomically. Network and broadcast addresses are never returned.
 	/// Any authenticated caller (including GlobalAdmin) may invoke this method;
 	/// subnet access must be verified by the caller before invoking.
+	///
+	/// <para>
+	/// <b>Concurrency:</b> Two requests arriving simultaneously can both read the same
+	/// "first available" IP before either commits (a classic TOCTOU race). The unique
+	/// index on <c>(SubnetId, IpAddress)</c> ensures the database rejects the duplicate;
+	/// this method catches the resulting <see cref="DbUpdateException"/> and retries up
+	/// to <c>MaxAllocationAttempts</c> times, re-reading the allocation state each time,
+	/// so the losing request transparently advances to the next free address.
+	/// </para>
 	/// </summary>
 	/// <param name="subnet">The subnet to allocate from.</param>
 	/// <param name="caller">The context of the authenticated caller making the allocation.</param>
 	/// <param name="description">Description to store with the allocation.</param>
 	/// <returns>The newly created <see cref="Allocation"/> record.</returns>
-	/// <exception cref="NoAvailableIpException">Thrown when no usable IP exists in the subnet.</exception>
+	/// <exception cref="NoAvailableIpException">Thrown when no usable IP exists in the subnet (after all retry attempts).</exception>
 	public async Task<Allocation> AllocateAsync(
 		Subnet subnet,
 		CallerContext caller,
 		string description)
 	{
-		// Build the set of IPs that must not be returned — includes exclusion
-		// ranges and all currently-allocated IPs.
-		var excludedSet = await BuildExcludedSetAsync(subnet);
-
-		var network = IPNetwork.Parse(subnet.Cidr);
-
-		// Walk the subnet looking for the first non-excluded usable address.
-		var ip = FindFirstAvailable(network, excludedSet)
-			?? throw new NoAvailableIpException($"No available IP addresses in subnet {subnet.Cidr}");
-
-		// Build the allocation record.
-		var allocation = new Allocation
+		for (var attempt = 0; attempt < MaxAllocationAttempts; attempt++)
 		{
-			Id = Guid.NewGuid(),
-			IpAddress = ip.ToString(),
-			UserId = caller.UserId,
-			SubnetId = subnet.Id,
-			Description = description,
-			AllocatedAt = DateTime.UtcNow
-			// BulkId is null for single allocations — left as default.
-		};
+			// Re-read the excluded set on every attempt so that IPs committed by
+			// concurrent requests since the last iteration are accounted for.
+			var excludedSet = await BuildExcludedSetAsync(subnet);
+			var network = IPNetwork.Parse(subnet.Cidr);
 
-		// Stage both the allocation and the audit entry; SaveChangesAsync below
-		// commits them in one transaction so neither can exist without the other.
-		_db.Allocations.Add(allocation);
-		_audit.Log(caller.UserId, caller.TenancyId, "Allocated", ip.ToString(), subnet.Id);
+			// Walk the subnet looking for the first non-excluded usable address.
+			// If the subnet is genuinely full, surface that immediately — retrying
+			// would not help because no amount of waiting will free an IP.
+			var ip = FindFirstAvailable(network, excludedSet)
+				?? throw new NoAvailableIpException($"No available IP addresses in subnet {subnet.Cidr}");
 
-		await _db.SaveChangesAsync();
-		return allocation;
-	}
-
-	/// <summary>
-	/// Finds a contiguous block of <paramref name="count"/> available IPs in the
-	/// subnet, writes an <see cref="Allocation"/> row per IP (all sharing the same
-	/// <c>BulkId</c>) plus an audit entry per IP, then commits everything atomically.
-	/// </summary>
-	/// <param name="subnet">The subnet to allocate from.</param>
-	/// <param name="caller">The context of the authenticated caller making the allocation.</param>
-	/// <param name="description">Description applied to every allocation in the bulk request.</param>
-	/// <param name="count">Number of consecutive IPs required. Must be positive.</param>
-	/// <returns>The list of newly created <see cref="Allocation"/> records, in ascending IP order.</returns>
-	/// <exception cref="NoContiguousBlockException">Thrown when no contiguous block of the requested size exists.</exception>
-	public async Task<List<Allocation>> BulkAllocateAsync(
-		Subnet subnet,
-		CallerContext caller,
-		string description,
-		int count)
-	{
-		// Same exclusion logic as single allocation — both exclusion ranges and
-		// already-allocated IPs are treated as unavailable.
-		var excludedSet = await BuildExcludedSetAsync(subnet);
-		var network = IPNetwork.Parse(subnet.Cidr);
-
-		// Find a run of <count> consecutive addresses with no excluded IPs in between.
-		var block = FindContiguousBlock(network, excludedSet, count)
-			?? throw new NoContiguousBlockException(
-				$"No contiguous block of {count} IPs available in subnet {subnet.Cidr}");
-
-		// All IPs in this bulk request share a single BulkId so callers can
-		// identify the batch, while each IP is still its own row (individually releasable).
-		var bulkId = Guid.NewGuid();
-		var allocations = new List<Allocation>(count);
-
-		foreach (var ip in block)
-		{
+			// Build the allocation record.
 			var allocation = new Allocation
 			{
 				Id = Guid.NewGuid(),
@@ -352,21 +318,117 @@ public class IpAllocationService
 				UserId = caller.UserId,
 				SubnetId = subnet.Id,
 				Description = description,
-				AllocatedAt = DateTime.UtcNow,
-				BulkId = bulkId
+				AllocatedAt = DateTime.UtcNow
+				// BulkId is null for single allocations — left as default.
 			};
 
-			allocations.Add(allocation);
+			// Stage both the allocation and the audit entry; SaveChangesAsync below
+			// commits them in one transaction so neither can exist without the other.
 			_db.Allocations.Add(allocation);
+			_audit.Log(caller.UserId, caller.TenancyId, "Allocated", ip.ToString(), subnet.Id);
 
-			// One audit entry per allocated IP so the audit trail shows every
-			// individual address that was handed out.
-			_audit.Log(caller.UserId, caller.TenancyId, "BulkAllocated", ip.ToString(), subnet.Id, $"BulkId={bulkId}");
+			try
+			{
+				await _db.SaveChangesAsync();
+				return allocation;
+			}
+			catch (DbUpdateException) when (attempt < MaxAllocationAttempts - 1)
+			{
+				// The unique index rejected this IP because a concurrent request
+				// committed the same address first. Clear the EF change tracker
+				// so the failed allocation and staged audit entry do not carry
+				// over into the next iteration, then retry with a fresh read.
+				_db.ChangeTracker.Clear();
+			}
 		}
 
-		// Commit all allocations and audit entries in one transaction.
-		await _db.SaveChangesAsync();
-		return allocations;
+		// All retry attempts were exhausted — the subnet is effectively full under
+		// concurrent load (each attempt kept racing to the same last free address).
+		throw new NoAvailableIpException($"No available IP addresses in subnet {subnet.Cidr}");
+	}
+
+	/// <summary>
+	/// Finds a contiguous block of <paramref name="count"/> available IPs in the
+	/// subnet, writes an <see cref="Allocation"/> row per IP (all sharing the same
+	/// <c>BulkId</c>) plus an audit entry per IP, then commits everything atomically.
+	///
+	/// <para>
+	/// <b>Concurrency:</b> Like <see cref="AllocateAsync"/>, this method re-reads the
+	/// allocation state on each retry attempt. If a concurrent commit causes a unique
+	/// constraint violation, the entire block is discarded and a new contiguous block
+	/// is searched for from the updated state. A new <c>BulkId</c> is generated on
+	/// each attempt so the returned allocations are always internally consistent.
+	/// </para>
+	/// </summary>
+	/// <param name="subnet">The subnet to allocate from.</param>
+	/// <param name="caller">The context of the authenticated caller making the allocation.</param>
+	/// <param name="description">Description applied to every allocation in the bulk request.</param>
+	/// <param name="count">Number of consecutive IPs required. Must be positive.</param>
+	/// <returns>The list of newly created <see cref="Allocation"/> records, in ascending IP order.</returns>
+	/// <exception cref="NoContiguousBlockException">Thrown when no contiguous block of the requested size exists (after all retry attempts).</exception>
+	public async Task<List<Allocation>> BulkAllocateAsync(
+		Subnet subnet,
+		CallerContext caller,
+		string description,
+		int count)
+	{
+		for (var attempt = 0; attempt < MaxAllocationAttempts; attempt++)
+		{
+			// Re-read the excluded set on every attempt so concurrent commits are
+			// reflected before we search for a block.
+			var excludedSet = await BuildExcludedSetAsync(subnet);
+			var network = IPNetwork.Parse(subnet.Cidr);
+
+			// Find a run of <count> consecutive addresses with no excluded IPs in between.
+			var block = FindContiguousBlock(network, excludedSet, count)
+				?? throw new NoContiguousBlockException(
+					$"No contiguous block of {count} IPs available in subnet {subnet.Cidr}");
+
+			// All IPs in this bulk request share a single BulkId so callers can
+			// identify the batch, while each IP is still its own row (individually releasable).
+			// A new BulkId is generated on each retry so the returned allocations are
+			// always internally consistent regardless of which attempt succeeds.
+			var bulkId = Guid.NewGuid();
+			var allocations = new List<Allocation>(count);
+
+			foreach (var ip in block)
+			{
+				var allocation = new Allocation
+				{
+					Id = Guid.NewGuid(),
+					IpAddress = ip.ToString(),
+					UserId = caller.UserId,
+					SubnetId = subnet.Id,
+					Description = description,
+					AllocatedAt = DateTime.UtcNow,
+					BulkId = bulkId
+				};
+
+				allocations.Add(allocation);
+				_db.Allocations.Add(allocation);
+
+				// One audit entry per allocated IP so the audit trail shows every
+				// individual address that was handed out.
+				_audit.Log(caller.UserId, caller.TenancyId, "BulkAllocated", ip.ToString(), subnet.Id, $"BulkId={bulkId}");
+			}
+
+			try
+			{
+				// Commit all allocations and audit entries in one transaction.
+				await _db.SaveChangesAsync();
+				return allocations;
+			}
+			catch (DbUpdateException) when (attempt < MaxAllocationAttempts - 1)
+			{
+				// A concurrent request committed one or more of the same IPs first.
+				// Clear the change tracker so none of the failed rows carry forward,
+				// then retry with a fresh read of the current allocation state.
+				_db.ChangeTracker.Clear();
+			}
+		}
+
+		throw new NoContiguousBlockException(
+			$"No contiguous block of {count} IPs available in subnet {subnet.Cidr}");
 	}
 
 	/// <summary>

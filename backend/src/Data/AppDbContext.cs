@@ -68,6 +68,15 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
 			.HasIndex(x => x.Name)
 			.IsUnique();
 
+		// Enforce that each IP address is allocated at most once per subnet.
+		// This is the database-level safeguard against concurrent double-allocation:
+		// if two requests race past the read-then-write check and try to insert the
+		// same (SubnetId, IpAddress) pair, exactly one succeeds and the other receives
+		// a DbUpdateException, which IpAllocationService catches and retries.
+		builder.Entity<Allocation>()
+			.HasIndex(x => new { x.SubnetId, x.IpAddress })
+			.IsUnique();
+
 		// Enforce the business rule: each tag key may appear at most once per
 		// allocation. This prevents duplicate-key confusion and makes PUT (full
 		// replace) predictable.

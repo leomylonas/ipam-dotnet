@@ -278,6 +278,42 @@ public abstract class AllocationsControllerTestsBase : IAsyncLifetime
 	}
 
 	/// <summary>
+	/// Regression test for the TOCTOU race condition where two requests arriving
+	/// simultaneously both read the same "first available" IP before either commits.
+	/// Without the unique index and retry logic, both requests would succeed and the
+	/// same IP would be allocated twice. With the fix, every response must contain a
+	/// distinct IP address.
+	/// </summary>
+	[Fact]
+	public async Task ConcurrentAllocate_NoDuplicateIps()
+	{
+		// Fire 5 requests simultaneously — the subnet has 6 usable IPs (.1–.6) so all
+		// 5 must succeed, and each must receive a distinct address.
+		const int concurrentRequests = 5;
+
+		// _tenantUserClient is thread-safe for concurrent sends; all tasks are launched
+		// before any awaiting so they hit the server at the same time.
+		var tasks = Enumerable.Range(0, concurrentRequests)
+			.Select(_ => _tenantUserClient.PostAsJsonAsync(
+				"/api/allocations", new AllocateRequest(_subnetId, "concurrent")))
+			.ToList();
+
+		var responses = await Task.WhenAll(tasks);
+
+		// Every request must have received 201 Created — there are enough free IPs.
+		Assert.All(responses, r => Assert.Equal(HttpStatusCode.Created, r.StatusCode));
+
+		// Deserialise all responses and verify each IP is unique.
+		var allocations = await Task.WhenAll(
+			responses.Select(r => r.Content.ReadFromJsonAsync<AllocationResponse>()));
+
+		var ips = allocations.Select(a => a!.IpAddress).ToList();
+
+		// The key assertion: no two concurrent requests should have been given the same IP.
+		Assert.Equal(concurrentRequests, ips.Distinct().Count());
+	}
+
+	/// <summary>
 	/// Verifies that releasing an allocation created by GlobalAdmin works correctly
 	/// when the admin calls DELETE on that allocation.
 	/// </summary>

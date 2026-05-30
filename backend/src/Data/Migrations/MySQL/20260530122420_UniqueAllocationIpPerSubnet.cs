@@ -1,0 +1,44 @@
+﻿using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace IpamService.Data.Migrations.MySQL
+{
+    /// <inheritdoc />
+    public partial class UniqueAllocationIpPerSubnet : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.AlterColumn<string>(
+                name: "IpAddress",
+                table: "Allocations",
+                type: "varchar(255)",
+                nullable: false,
+                oldClrType: typeof(string),
+                oldType: "longtext");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Allocations_SubnetId_IpAddress",
+                table: "Allocations",
+                columns: new[] { "SubnetId", "IpAddress" },
+                unique: true);
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropIndex(
+                name: "IX_Allocations_SubnetId_IpAddress",
+                table: "Allocations");
+
+            migrationBuilder.AlterColumn<string>(
+                name: "IpAddress",
+                table: "Allocations",
+                type: "longtext",
+                nullable: false,
+                oldClrType: typeof(string),
+                oldType: "varchar(255)");
+        }
+    }
+}

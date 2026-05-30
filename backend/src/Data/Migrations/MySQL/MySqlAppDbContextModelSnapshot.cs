@@ -37,7 +37,7 @@ namespace IpamService.Data.Migrations.MySQL
 
                     b.Property<string>("IpAddress")
                         .IsRequired()
-                        .HasColumnType("longtext");
+                        .HasColumnType("varchar(255)");
 
                     b.Property<Guid>("SubnetId")
                         .HasColumnType("char(36)");
@@ -47,6 +47,9 @@ namespace IpamService.Data.Migrations.MySQL
                         .HasColumnType("longtext");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("SubnetId", "IpAddress")
+                        .IsUnique();
 
                     b.ToTable("Allocations");
                 });

@@ -46,6 +46,9 @@ namespace IpamService.Data.Migrations.SQLite
 
                     b.HasKey("Id");
 
+                    b.HasIndex("SubnetId", "IpAddress")
+                        .IsUnique();
+
                     b.ToTable("Allocations");
                 });
 
